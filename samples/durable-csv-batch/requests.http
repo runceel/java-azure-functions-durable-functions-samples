@@ -1,0 +1,17 @@
+@baseUrl = http://localhost:7072
+@batchId = workshop-001
+
+### Start the CSV batch
+# @name startBatch
+POST {{baseUrl}}/api/batch/start
+Content-Type: application/json
+
+{
+  "batchId": "{{batchId}}",
+  "blobName": "sample-input.csv",
+  "pageSize": 2,
+  "maxParallel": 2
+}
+
+### Check the orchestration status (run repeatedly until Completed)
+GET {{startBatch.response.body.$.statusQueryGetUri}}

@@ -1,0 +1,12 @@
+@baseUrl = http://localhost:7072
+
+### Check a file name
+POST {{baseUrl}}/api/CheckFile
+Content-Type: text/plain
+
+sample.csv
+
+### Reject an empty file name
+POST {{baseUrl}}/api/CheckFile
+Content-Type: text/plain
+Content-Length: 0

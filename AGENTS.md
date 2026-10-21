@@ -34,17 +34,22 @@ Skill がツールで読み込めない環境では、このリポジトリ内�
 | `samples\durable-functions\pom.xml` | Java 依存関係、Functions の package/run |
 | `samples\durable-functions\host.json` | Durable の `azureManaged` provider と extension bundle |
 | `samples\durable-functions\src\main\java\com\example\Functions.java` | `StartHello` → `HelloOrchestration` → `SayHello` |
+| `samples\http-check-file` | Workshop HTTP `CheckFile` function and `apphost.cs` |
+| `samples\durable-csv-batch` | Workshop CSV split/import with Durable, Azurite, PostgreSQL and `apphost.cs` |
 | `storage` | Azurite。Blob 10000、Queue 10001、Table 10002 |
 | `scheduler` / `default` | DTS Emulator と task hub |
 | `durable-functions` | Maven Wrapper 経由の Java Functions host |
 
-単純な HTTP 専用／Blob + Queue のサンプルと呼び出しプログラムは、まだ実装されていません。
-Durable の最小動作確認と、今後の通常 Functions の追加方針を混同しないでください。
+ワークショップサンプルは既存の `durable-functions` と別の AppHost で起動します。
+`CheckFile` は単純な HTTP 例、`durable-csv-batch` は Blob の CSV を Durable
+Activity で処理して PostgreSQL に登録する例です。Queue トリガーは使用しません。
 
 ## 必ず守ること
 
 - コマンドはリポジトリのルートから実行する。現在の `apphost.cs` はそこを基準に
   `samples\durable-functions` を解決する。別ディレクトリから絶対 `--apphost` だけを渡さない。
+- Workshop AppHost は `.\samples\http-check-file\apphost.cs` と
+  `.\samples\durable-csv-batch\apphost.cs`。起動前に `aspire ps` で既存実行を確認する。
 - 既存の AppHost を使う。`aspire init` / `aspire agent init` を毎回実行しない。
   公式 Aspire Skills は CLI 更新時に上書きされるため編集しない。
   リポジトリ固有の知識は `java-functions-aspire` にのみ置き、
@@ -55,7 +60,8 @@ Durable の最小動作確認と、今後の通常 Functions の追加方針を�
 - `aspire wait` の `Healthy` は Maven プロセス起動の段階でも返る。
   **Functions host のログ、HTTP 応答、Durable の `Completed` と期待出力まで確認する。**
 - Windows の Maven Wrapper 用 PATH、`package` → `azure-functions:run` の順序、
-  `targetPort: 7071` と動的なホスト側ポートを維持する。
+  `targetPort: 7071` を維持する。Workshop AppHost は `.http` 用に公開ポート `7072` を固定し、
+  最小 Durable AppHost は動的なホスト側ポートを使う。
 - スケジューラの接続先は task hub の `ConnectionStringExpression` から渡す。
   過去の実行で得た動的 URL・ポート・管理用キーをコードやドキュメントに固定しない。
 - 未知の Aspire API は CLI の docs/API 検索で確認する。

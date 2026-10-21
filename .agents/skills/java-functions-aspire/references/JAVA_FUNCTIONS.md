@@ -6,9 +6,14 @@ Java Functions の追加・配線・起動・障害調査の共通手順です�
 独立した `java-functions-aspire` Skill の詳細手順です。起動停止は `aspire-orchestration`、
 観測は `aspire-monitoring` の安全規則を守って実行してください。
 
-2026-10-20 に Windows 上で、HTTP Starter → Orchestrator → Activity を
-Azurite + Durable Task Scheduler (DTS) Emulator に接続して実行確認しました。
-通常の HTTP／Blob + Queue サンプルは未実装です。下記の追加方針は実行済みサンプルではありません。
+2026-10-21 に Windows 上で次のローカルサンプルを検証しました。
+
+- `samples\durable-functions`: HTTP Starter → Orchestrator → Activity が DTS Emulator 上で `Completed`。
+- `samples\http-check-file`: `CheckFile` が HTTP 200 と空入力時の HTTP 400 を返すことを確認。
+- `samples\durable-csv-batch`: Azurite の CSV をページ分割し、DTS Emulator の Durable 処理で PostgreSQL に登録。
+  サンプル入力の結果は成功4件・不正1件・ページ3件。同じ batch ID の再実行でも DB 件数が変わらないことを確認。
+
+いずれもこの Windows 環境でのローカル検証です。全 JDK／OS での互換性は保証しません。
 
 | 要素 | 確認時の構成 |
 |---|---|
@@ -18,6 +23,7 @@ Azurite + Durable Task Scheduler (DTS) Emulator に接続して実行確認し�
 | Maven Wrapper | Maven 3.9.11 |
 | Functions Maven plugin / Java library | 1.42.0 / 3.3.0 |
 | `com.microsoft:durabletask-azure-functions` | 1.9.0 |
+| `azure-storage-blob` / `commons-csv` / PostgreSQL JDBC | 12.29.1 / 1.14.1 / 42.7.7 |
 | コンパイルターゲット / 検証に使った JDK | Java 11 / Microsoft JDK 25.0.4.1 |
 | Functions extension bundle | `[4.*, 5.0.0)` |
 
@@ -86,6 +92,12 @@ Orchestrator に直接 I/O を入れず、Activity で実行する。
 
 .NET 用の Functions project hosting や `AddServiceDefaults()` を Java に挿入しない。
 Java hosting の OTel 環境変数があるだけで Functions 本体の分散トレースが確認済みとは言わない。
+
+Workshop AppHost は `.http` ファイルから安定して呼べるよう、
+`WithHttpEndpoint(port: 7072, targetPort: 7071, name: "http")` を使用する。
+HTTP Functions host は同時に1つだけ起動すること。Core Tools のローカル起動は
+通常 HTTP authorization を強制しないため、`AuthorizationLevel.FUNCTION` の関数も
+ローカルの `.http` からキーなしで呼び出せる。デプロイ環境では引き続き Function key が必要。
 
 ## 3. 起動と本当の readiness
 
@@ -166,23 +178,23 @@ Activity の String 入力に引用符が含まれる現行 SDK／binding の挙
 引用符なしの出力だったと報告しない。直す場合は I/O 契約の調査と別の検証を伴う変更として扱う。
 管理 URL にはキーが含まれ得る。レスポンス全体や接続情報を永続ファイルに保存しない。
 
-## 5. 通常の Java Functions を追加する場合
+## 5. Workshop の通常 / Durable Java Functions
 
-1. HTTP のみか Blob + Queue か、入力・出力の契約を確認してから実装する。
-2. 既存サンプルの Maven Wrapper と Functions plugin の構成を再利用する。
-   `pom.xml` の app name、Java クラス、`host.json` を新アプリ用に揃える。
-   Durable を使わなければ Durable SDK、`durableTask` provider、
-   DTS 接続環境変数、scheduler の待機は不要。既存 Durable サンプルからは削除しない。
-3. AppHost では別名の Java resource を `AddJavaApp` で追加し、
-   package/run 順序、wrapper の PATH、Azurite 接続を同じ原則で配線する。
-   同時に起動する Functions host には別々の内部ポートが必要。
-   Functions Maven plugin／Core Tools のポート引数を公式資料で確認し、
-   実際の listen port と AppHost の `targetPort` を一致させる。
-4. HTTP は現在の公開 endpoint と契約した status/body を検証する。
-   Blob + Queue は入力 Blob を配置して Queue へ依頼を送り、処理後 Blob の内容まで確認する。
-   Queue 投入成功、関数呼び出し成功だけを完了条件にしない。
-5. 新しい関数名・resource 名・入出力契約と検証手順を README に反映する。
-   ここに未実装の通常 Functions があるように書き換えない。
+`samples\http-check-file` は `CheckFile` の HTTP 入力検証例です。HTTP だけなので Durable SDK、
+`durableTask` provider、DTS 接続設定は不要です。`samples\durable-csv-batch` は以下を一通り示します。
+
+- `BatchInput`、`PageRef`、`BatchPlan`、`PageResult` の JSON データ型
+- `StartBatch` の入力検証と Durable 起動
+- `PreparePages` による `batch-inputs` CSV のページ分割、`batch-pages` Blob への保存
+- `BatchOrchestration` の並列ウィンドウ実行と Activity ごとの3回・5秒間隔のリトライ
+- `ProcessPage` の PostgreSQL トランザクション、行エラー記録、ページ完了マーカーによる冪等性
+
+CSV は `id,name` ヘッダーを持ち、`id` は正の整数、`name` は空でない値とします。
+行の検証エラーは `rejected_rows` に保存して継続し、Blob／DB などのシステム障害は成功件数に
+置き換えず例外として失敗させます。1つの batch ID は1つの論理入力にのみ使います。
+起動・入力 Blob のアップロード・状態確認方法はルート `README.md` に記載しています。
+各 HTTP 呼び出しはサンプル直下の `requests.http` に記載し、Functions host 内部ポート
+7071 を Aspire の安定したローカルポート 7072 に公開しています。
 
 ## 6. 失敗の切り分けと後片付け
 

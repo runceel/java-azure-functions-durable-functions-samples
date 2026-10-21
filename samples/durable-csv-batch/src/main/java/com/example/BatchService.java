@@ -1,0 +1,301 @@
+package com.example;
+
+import com.azure.storage.blob.BlobClient;
+import com.azure.storage.blob.BlobContainerClient;
+import com.azure.storage.blob.BlobServiceClient;
+import com.azure.storage.blob.BlobServiceClientBuilder;
+import com.azure.core.util.BinaryData;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.StringReader;
+import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+public class BatchService {
+    private static final String INPUT_CONTAINER = "batch-inputs";
+    private static final String PAGE_CONTAINER = "batch-pages";
+    private static final CSVFormat INPUT_CSV_FORMAT = CSVFormat.DEFAULT.builder()
+            .setHeader()
+            .setSkipHeaderRecord(true)
+            .setIgnoreEmptyLines(true)
+            .build();
+    private static final CSVFormat OUTPUT_CSV_FORMAT = CSVFormat.DEFAULT;
+
+    public BatchPlan preparePages(BatchInput input) {
+        BlobServiceClient service = blobService();
+        BlobContainerClient inputContainer = service.getBlobContainerClient(INPUT_CONTAINER);
+        BlobClient inputBlob = inputContainer.getBlobClient(input.blobName);
+        if (!inputBlob.exists()) {
+            throw new IllegalArgumentException(
+                    "Input blob does not exist in container " + INPUT_CONTAINER);
+        }
+
+        BlobContainerClient pageContainer = service.getBlobContainerClient(PAGE_CONTAINER);
+        pageContainer.createIfNotExists();
+        List<PageRef> pages = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(
+                new java.io.InputStreamReader(inputBlob.openInputStream(), StandardCharsets.UTF_8));
+             CSVParser parser = INPUT_CSV_FORMAT.parse(reader)) {
+            Map<String, Integer> headers = parser.getHeaderMap();
+            if (headers == null || !headers.containsKey("id") || !headers.containsKey("name")) {
+                throw new IllegalArgumentException("CSV must contain id and name columns.");
+            }
+
+            List<String[]> rows = new ArrayList<>(input.pageSize);
+            for (CSVRecord record : parser) {
+                rows.add(new String[] {record.get("id"), record.get("name")});
+                if (rows.size() == input.pageSize) {
+                    pages.add(writePage(pageContainer, input.batchId, pages.size() + 1, rows));
+                    rows.clear();
+                }
+            }
+            if (!rows.isEmpty()) {
+                pages.add(writePage(pageContainer, input.batchId, pages.size() + 1, rows));
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to read or split the input CSV.", e);
+        }
+
+        BatchPlan plan = new BatchPlan();
+        plan.pages = pages.toArray(new PageRef[0]);
+        return plan;
+    }
+
+    public PageResult importPageOnce(PageRef page) {
+        try (Connection connection = databaseConnection()) {
+            connection.setAutoCommit(false);
+            createSchema(connection);
+            if (!claimPage(connection, page)) {
+                PageResult existing = readPageResult(connection, page);
+                connection.commit();
+                return existing;
+            }
+
+            PageResult result = importRows(connection, page);
+            updatePageResult(connection, page, result);
+            connection.commit();
+            return result;
+        } catch (SQLException | IOException e) {
+            throw new IllegalStateException(
+                    "Unable to import page " + page.pageId + " for batch " + page.batchId, e);
+        }
+    }
+
+    private PageRef writePage(
+            BlobContainerClient container, String batchId, int pageId, List<String[]> rows) {
+        String blobName = batchId + "/" + pageId + ".csv";
+        try (StringWriter text = new StringWriter();
+             CSVPrinter printer = new CSVPrinter(text, OUTPUT_CSV_FORMAT)) {
+            printer.printRecord("id", "name");
+            for (String[] row : rows) {
+                printer.printRecord((Object[]) row);
+            }
+            printer.flush();
+            container.getBlobClient(blobName)
+                    .upload(BinaryData.fromString(text.toString()), true);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to create a page CSV.", e);
+        }
+        PageRef page = new PageRef();
+        page.batchId = batchId;
+        page.pageId = pageId;
+        page.blobName = blobName;
+        return page;
+    }
+
+    private PageResult importRows(Connection connection, PageRef page)
+            throws IOException, SQLException {
+        BlobClient blob = blobService().getBlobContainerClient(PAGE_CONTAINER)
+                .getBlobClient(page.blobName);
+        if (!blob.exists()) {
+            throw new IllegalStateException("Page blob does not exist: " + page.blobName);
+        }
+
+        PageResult result = new PageResult();
+        try (BufferedReader reader = new BufferedReader(
+                new java.io.InputStreamReader(blob.openInputStream(), StandardCharsets.UTF_8));
+             CSVParser parser = OUTPUT_CSV_FORMAT.builder()
+                     .setHeader()
+                     .setSkipHeaderRecord(true)
+                     .build()
+                     .parse(reader)) {
+            for (CSVRecord record : parser) {
+                int lineNumber = Math.toIntExact(record.getRecordNumber() + 1);
+                String idText = record.get("id").trim();
+                String name = record.get("name").trim();
+                Integer recordId = parsePositiveInteger(idText);
+                if (recordId == null || name.isBlank()) {
+                    insertRejectedRow(
+                            connection, page, lineNumber, idText, name, csvRow(record));
+                    result.failureCount++;
+                } else {
+                    insertRecord(connection, page.batchId, recordId, name);
+                    result.successCount++;
+                }
+            }
+        }
+        return result;
+    }
+
+    private static Integer parsePositiveInteger(String value) {
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String csvRow(CSVRecord record) throws IOException {
+        try (StringWriter text = new StringWriter();
+             CSVPrinter printer = new CSVPrinter(text, OUTPUT_CSV_FORMAT)) {
+            List<String> fields = new ArrayList<>();
+            for (String field : record) {
+                fields.add(field);
+            }
+            printer.printRecord(fields);
+            printer.flush();
+            return text.toString().stripTrailing();
+        }
+    }
+
+    private static void createSchema(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(
+                    "CREATE TABLE IF NOT EXISTS batch_page_runs (" +
+                    "batch_id VARCHAR(64) NOT NULL, " +
+                    "page_id INTEGER NOT NULL, " +
+                    "success_count INTEGER NOT NULL, " +
+                    "failure_count INTEGER NOT NULL, " +
+                    "PRIMARY KEY (batch_id, page_id))");
+            statement.execute(
+                    "CREATE TABLE IF NOT EXISTS imported_records (" +
+                    "batch_id VARCHAR(64) NOT NULL, " +
+                    "record_id INTEGER NOT NULL, " +
+                    "name TEXT NOT NULL, " +
+                    "PRIMARY KEY (batch_id, record_id))");
+            statement.execute(
+                    "CREATE TABLE IF NOT EXISTS rejected_rows (" +
+                    "batch_id VARCHAR(64) NOT NULL, " +
+                    "page_id INTEGER NOT NULL, " +
+                    "line_number INTEGER NOT NULL, " +
+                    "reason TEXT NOT NULL, " +
+                    "raw_row TEXT NOT NULL, " +
+                    "PRIMARY KEY (batch_id, page_id, line_number))");
+        }
+    }
+
+    private static boolean claimPage(Connection connection, PageRef page) throws SQLException {
+        String sql =
+                "INSERT INTO batch_page_runs(batch_id, page_id, success_count, failure_count) " +
+                "VALUES (?, ?, -1, -1) ON CONFLICT (batch_id, page_id) DO NOTHING";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, page.batchId);
+            statement.setInt(2, page.pageId);
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    private static PageResult readPageResult(Connection connection, PageRef page)
+            throws SQLException {
+        String sql = "SELECT success_count, failure_count FROM batch_page_runs " +
+                "WHERE batch_id = ? AND page_id = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, page.batchId);
+            statement.setInt(2, page.pageId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next() || resultSet.getInt("success_count") < 0) {
+                    throw new SQLException("Existing page marker is incomplete.");
+                }
+                PageResult result = new PageResult();
+                result.successCount = resultSet.getInt("success_count");
+                result.failureCount = resultSet.getInt("failure_count");
+                return result;
+            }
+        }
+    }
+
+    private static void insertRecord(
+            Connection connection, String batchId, int recordId, String name)
+            throws SQLException {
+        String sql = "INSERT INTO imported_records(batch_id, record_id, name) " +
+                "VALUES (?, ?, ?) ON CONFLICT (batch_id, record_id) " +
+                "DO UPDATE SET name = EXCLUDED.name";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, batchId);
+            statement.setInt(2, recordId);
+            statement.setString(3, name);
+            statement.executeUpdate();
+        }
+    }
+
+    private static void insertRejectedRow(
+            Connection connection, PageRef page, int lineNumber,
+            String id, String name, String rawRow) throws SQLException {
+        String reason = id.isBlank()
+                ? "id is required"
+                : name.isBlank() ? "name is required" : "id must be a positive integer";
+        String sql = "INSERT INTO rejected_rows(batch_id, page_id, line_number, reason, raw_row) " +
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (batch_id, page_id, line_number) " +
+                "DO UPDATE SET reason = EXCLUDED.reason, raw_row = EXCLUDED.raw_row";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, page.batchId);
+            statement.setInt(2, page.pageId);
+            statement.setInt(3, lineNumber);
+            statement.setString(4, reason);
+            statement.setString(5, rawRow);
+            statement.executeUpdate();
+        }
+    }
+
+    private static void updatePageResult(
+            Connection connection, PageRef page, PageResult result) throws SQLException {
+        String sql = "UPDATE batch_page_runs SET success_count = ?, failure_count = ? " +
+                "WHERE batch_id = ? AND page_id = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, result.successCount);
+            statement.setInt(2, result.failureCount);
+            statement.setString(3, page.batchId);
+            statement.setInt(4, page.pageId);
+            if (statement.executeUpdate() != 1) {
+                throw new SQLException("Unable to persist the page completion marker.");
+            }
+        }
+    }
+
+    private static BlobServiceClient blobService() {
+        String connectionString = requiredEnvironment("AZURE_STORAGE_CONNECTION_STRING");
+        return new BlobServiceClientBuilder()
+                .connectionString(connectionString)
+                .buildClient();
+    }
+
+    private static Connection databaseConnection() throws SQLException {
+        return DriverManager.getConnection(
+                requiredEnvironment("DB_JDBC_URL"),
+                requiredEnvironment("DB_USERNAME"),
+                requiredEnvironment("DB_PASSWORD"));
+    }
+
+    private static String requiredEnvironment(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Required environment variable is not set: " + name);
+        }
+        return value;
+    }
+}
