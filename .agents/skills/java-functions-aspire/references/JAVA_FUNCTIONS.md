@@ -1,0 +1,227 @@
+# Java Azure Functions / Durable Functions を Aspire で扱う
+
+## 対象と確認済みの範囲
+
+Java Functions の追加・配線・起動・障害調査の共通手順です。
+独立した `java-functions-aspire` Skill の詳細手順です。起動停止は `aspire-orchestration`、
+観測は `aspire-monitoring` の安全規則を守って実行してください。
+
+2026-10-20 に Windows 上で、HTTP Starter → Orchestrator → Activity を
+Azurite + Durable Task Scheduler (DTS) Emulator に接続して実行確認しました。
+通常の HTTP／Blob + Queue サンプルは未実装です。下記の追加方針は実行済みサンプルではありません。
+
+| 要素 | 確認時の構成 |
+|---|---|
+| Aspire CLI / AppHost SDK | 13.6.1 |
+| `Aspire.Hosting.Azure.Functions` / `Azure.Storage` | 13.6.1 |
+| `Aspire.Hosting.Java` | 13.6.0-preview.1.26479.8 |
+| Maven Wrapper | Maven 3.9.11 |
+| Functions Maven plugin / Java library | 1.42.0 / 3.3.0 |
+| `com.microsoft:durabletask-azure-functions` | 1.9.0 |
+| コンパイルターゲット / 検証に使った JDK | Java 11 / Microsoft JDK 25.0.4.1 |
+| Functions extension bundle | `[4.*, 5.0.0)` |
+
+バージョンの正本は `apphost.cs`、`pom.xml`、wrapper properties、`host.json`。
+この表は全 JDK／OS でのサポートや互換性を保証しません。更新時は実際の API と実行を再確認します。
+
+## 1. 前提条件と作業場所
+
+リポジトリルートを作業ディレクトリにする。現在の AppHost は
+`Path.GetFullPath(".\\samples\\durable-functions")` を使うため、別 cwd からの起動は避ける。
+パスには Windows の区切り文字を使い、別マシンの絶対パスをコピーしない。
+
+必要なものは .NET SDK（file-based AppHost 用に .NET 10 以降）、
+Aspire CLI、JDK、Azure Functions Core Tools v4 (`func`)、Linux コンテナを使う Docker。
+Maven 本体は wrapper が取得します。ローカル実行に Azure サブスクリプション／認証／MCP は不要です。
+
+```powershell
+dotnet --list-sdks
+aspire --version
+func --version
+java -version
+Test-Path "$env:JAVA_HOME\bin\java.exe"
+docker version
+aspire doctor
+```
+
+`JAVA_HOME` が消えた JDK を指している場合は、インストール済みの JDK を確認し、
+当該実行プロセスの環境だけを修正する。ユーザー／マシンの環境設定を無断変更しない。
+Docker が停止中なら起動を確認してから進む。
+既存 AppHost があるので `aspire init`、`aspire add`、再インストールを初手にしない。
+
+## 2. 配線の不変条件
+
+`apphost.cs` を読んでから編集する。知らない API は以下で検索し、返った ID の詳細を読む。
+検索が複数語で見つからなければメソッド名だけで調べる。
+
+```powershell
+aspire docs search "Java Maven"
+aspire docs api search "AddJavaApp" --language csharp
+aspire docs api search "WithWrapperPath" --language csharp
+aspire docs api search "WithHttpEndpoint" --language csharp
+aspire docs api search "AddDurableTaskScheduler" --language csharp
+```
+
+| 設定 | 理由／禁止事項 |
+|---|---|
+| `AddJavaApp` + `WithMavenGoal("package", "azure-functions:run")` | Java Functions は Maven プラグイン経由で Core Tools を起動する。`run` だけでは初回の staging directory がない |
+| OS に合う `mvnw.cmd` / `mvnw` を `WithWrapperPath` に渡す | グローバル Maven に依存させない |
+| Functions ディレクトリを既存 PATH の先頭に追加 | 検証した preview は wrapper path の指定後も Windows で `cmd /c call mvnw.cmd` を生成した。この環境では名前だけだと見つからず、`.\mvnw.cmd` は成功した |
+| `WithHttpEndpoint(targetPort: 7071, name: "http")` | Core Tools が使う内部 7071 を指定し、ホスト側は Aspire が動的割当。`port: 7071` だけだと Aspire proxy が同じポートを確保し競合する |
+| `AzureWebJobsStorage=UseDevelopmentStorage=true` | Azurite の標準 Blob/Queue/Table ポート 10000/10001/10002 と対応。片方だけ変更しない |
+| `WaitFor(storage)` / `WaitFor(scheduler)` | 依存サービスの準備を待つ。Functions host 自体の HTTP readiness は保証しない |
+| `AddDurableTaskScheduler(...).RunAsEmulator()` + `AddTaskHub("default")` | DTS 用。`ASPIREDURABLETASK001` は該当 API の範囲でのみ抑制する |
+| `DURABLE_TASK_SCHEDULER_CONNECTION_STRING` に task hub の `ConnectionStringExpression` | 動的な gRPC 接続先と hub を正しく渡す。過去のポートや管理画面 URL を使わない |
+
+`host.json` は `durableTask.hubName=default`、
+`storageProvider.type=azureManaged`、
+`connectionStringName=DURABLE_TASK_SCHEDULER_CONNECTION_STRING` を保持する。
+Azurite があるからといって Durable の backend を Azure Storage に戻さない。
+
+Java の `DurableActivityTrigger`、`DurableClientInput`、`DurableOrchestrationTrigger`、
+`DurableClientContext` は **`com.microsoft.durabletask.azurefunctions`**。
+`com.microsoft.azure.functions.annotation` ではない。
+通常の `FunctionName` / `HttpTrigger` は従来の Functions annotation package を使う。
+Orchestrator に直接 I/O を入れず、Activity で実行する。
+
+.NET 用の Functions project hosting や `AddServiceDefaults()` を Java に挿入しない。
+Java hosting の OTel 環境変数があるだけで Functions 本体の分散トレースが確認済みとは言わない。
+
+## 3. 起動と本当の readiness
+
+最初に `aspire ps` で既存インスタンスを確認する。
+ユーザーの既存稼働を勝手に止めない。複数 AppHost がある場合は対象を明示する。
+VS Code lifecycle tool がある場合は orchestration Skill の優先順位に従う。
+以下は CLI fallback の手順です。
+
+```powershell
+aspire start --non-interactive --apphost .\apphost.cs
+if ($LASTEXITCODE -ne 0) { throw "AppHost startup failed." }
+aspire wait durable-functions --non-interactive --apphost .\apphost.cs
+if ($LASTEXITCODE -ne 0) { throw "Functions resource failed to start." }
+aspire describe --format Json --non-interactive --apphost .\apphost.cs
+aspire logs durable-functions --non-interactive --apphost .\apphost.cs
+```
+
+**このリソースには host readiness の health check がない。**
+`Healthy` の直後に Maven のダウンロードやコンパイルが続くことがある。
+依存取得 → package → Core Tools → Java worker → 3 関数の発見をログで確認する。
+`StartHello: [POST] .../api/orchestrations/hello` が出ても、直後の bind error を見落とさない。
+必要なら `aspire logs durable-functions --follow --non-interactive --apphost .\apphost.cs`
+で追跡し、ログ購読だけを停止してから検証する。購読を残さない。
+初回の取得は時間がかかる。起動待ちを HTTP リトライループで置き換えない。
+
+worktree の同時起動は `--isolated` が必要。ただしこのサンプルは内部 7071 と
+Azurite のポートを固定しているため、それだけで衝突しないとは限らない。
+並行インスタンスが必要なら、Core Tools のポートと対応する AppHost endpoint、
+storage 接続設定を一緒に見直す。無関係なプロセスを止めて解消しない。
+
+## 4. HTTP Starter と Durable の完了を検証
+
+URL は必ず現在の `aspire describe` から取得する。ログの内部 7071 や過去の動的ポートをコピーしない。
+以下は PowerShell での検証例。最初の受付と最終結果の両方を確認する。
+status の期限付き照会は orchestration 完了確認用であり、host 起動の polling ではありません。
+
+```powershell
+$ErrorActionPreference = "Stop"
+$json = aspire describe --format Json --non-interactive --apphost .\apphost.cs
+if ($LASTEXITCODE -ne 0) { throw "Cannot read Aspire resource state." }
+$functions = @(($json | ConvertFrom-Json).resources |
+    Where-Object displayName -eq "durable-functions")
+if ($functions.Count -ne 1 -or $functions[0].state -ne "Running") {
+    throw "Expected exactly one running durable-functions resource."
+}
+$endpoints = @($functions[0].urls | Where-Object name -eq "http")
+if ($endpoints.Count -ne 1) { throw "Expected exactly one HTTP endpoint." }
+$endpoint = $endpoints[0].url.TrimEnd("/")
+$response = Invoke-WebRequest -Method Post `
+    -Uri "$endpoint/api/orchestrations/hello" -TimeoutSec 30
+if ([int]$response.StatusCode -ne 202) { throw "Starter did not return HTTP 202." }
+$start = $response.Content | ConvertFrom-Json
+if (-not $start.id -or -not $start.statusQueryGetUri) {
+    throw "Starter response is missing instance ID or status URL."
+}
+$deadline = [DateTime]::UtcNow.AddSeconds(60)
+do {
+    $status = Invoke-RestMethod -Uri $start.statusQueryGetUri -TimeoutSec 10
+    if ($status.runtimeStatus -eq "Completed") { break }
+    if ($status.runtimeStatus -in @("Failed", "Terminated", "Canceled")) {
+        throw "Orchestration ended with $($status.runtimeStatus): $($status.output)"
+    }
+    if ([DateTime]::UtcNow -ge $deadline) { throw "Orchestration completion timed out." }
+    Start-Sleep -Seconds 1
+} while ($true)
+if ($status.output -cne 'Hello, "Durable Functions"!') {
+    throw "Unexpected orchestration output: $($status.output)"
+}
+[pscustomobject]@{
+    instanceId = $start.id
+    runtimeStatus = $status.runtimeStatus
+    output = $status.output
+}
+```
+
+現在の実測値は `Completed`、`Hello, "Durable Functions"!`。
+Activity の String 入力に引用符が含まれる現行 SDK／binding の挙動が見られたため、
+引用符なしの出力だったと報告しない。直す場合は I/O 契約の調査と別の検証を伴う変更として扱う。
+管理 URL にはキーが含まれ得る。レスポンス全体や接続情報を永続ファイルに保存しない。
+
+## 5. 通常の Java Functions を追加する場合
+
+1. HTTP のみか Blob + Queue か、入力・出力の契約を確認してから実装する。
+2. 既存サンプルの Maven Wrapper と Functions plugin の構成を再利用する。
+   `pom.xml` の app name、Java クラス、`host.json` を新アプリ用に揃える。
+   Durable を使わなければ Durable SDK、`durableTask` provider、
+   DTS 接続環境変数、scheduler の待機は不要。既存 Durable サンプルからは削除しない。
+3. AppHost では別名の Java resource を `AddJavaApp` で追加し、
+   package/run 順序、wrapper の PATH、Azurite 接続を同じ原則で配線する。
+   同時に起動する Functions host には別々の内部ポートが必要。
+   Functions Maven plugin／Core Tools のポート引数を公式資料で確認し、
+   実際の listen port と AppHost の `targetPort` を一致させる。
+4. HTTP は現在の公開 endpoint と契約した status/body を検証する。
+   Blob + Queue は入力 Blob を配置して Queue へ依頼を送り、処理後 Blob の内容まで確認する。
+   Queue 投入成功、関数呼び出し成功だけを完了条件にしない。
+5. 新しい関数名・resource 名・入出力契約と検証手順を README に反映する。
+   ここに未実装の通常 Functions があるように書き換えない。
+
+## 6. 失敗の切り分けと後片付け
+
+まず `aspire describe`、構造化ログがあれば `aspire otel logs`、
+次に `aspire logs durable-functions` と必要な依存サービスのログを見る。
+稼働中の実行と昔の resource のログを取り違えないよう、resource 名／起動時刻も確認する。
+
+| 症状 | 確認・対処 |
+|---|---|
+| `mvnw.cmd` が見つからず `Finished` | wrapper の存在と workDir、resource の PATH を確認。プロジェクトから `.\mvnw.cmd -v` で切り分ける |
+| `Stage directory not found. Please run mvn package first.` | `package` を先に実行し、plugin の package execution があることを確認 |
+| Durable の3注釈を解決できない | `com.microsoft.durabletask.azurefunctions` から import。SDK の依存 group/artifact も確認 |
+| `Healthy` の後に終了 | health check がないため。Maven/Core Tools の末尾ログと exit code を確認 |
+| HTTP が timeout / `address already in use` | 公開 port と `targetPort` の混同、別 host の内部 port 競合を確認。過去の失敗では Aspire proxy 自体が 7071 を占有していた |
+| `JAVA_HOME` invalid | 実在する JDK を確認し当該実行の環境を修正。古いマシン固有パスを写さない |
+| DTS 接続不可／いつまでも完了しない | scheduler の状態、現在の gRPC endpoint、task hub、provider、接続環境変数の名前を照合 |
+| Aspire integration catalog に Java がない | 確認時は `aspire add java` が見つからなかった。現行の catalog/docs を再確認し、必要なら `apphost.cs` の検証済み `#:package` を維持する |
+| `WithEnvironment` の補間で char の型エラー | Aspire の補間 overload 用に `Path.PathSeparator.ToString()` を使うか、先に通常の string を組み立てる |
+| NU1902 / NU1903 警告 | 確認時は推移依存の MessagePack / Pkcs に警告。成功で隠さず、起動失敗とは分離する。更新は別途確認してから行う |
+
+Java ソースのみの修正は resource の公開 command (`start` / `restart`) を確認して使う。
+AppHost 配線を変えた場合は対象 AppHost を通常停止して再起動する。
+検証のため自分で起動した AppHost は、継続利用を求められていなければ終了時に停止する。
+以下も editor tool 優先の規則に従った CLI fallback です。
+
+```powershell
+aspire stop --non-interactive --apphost .\apphost.cs
+if ($LASTEXITCODE -ne 0) { throw "AppHost stop failed." }
+aspire ps
+```
+
+`--all` / `--force` を使わない。`target` や他人のプロセスを消して問題を隠さない。
+Session 内の一時的なログ購読・検証プロセスも停止する。
+
+## 報告と知識の更新
+
+報告は「変更内容」「Starter HTTP status」「runtimeStatus / output」
+「停止済みか」「未確認・失敗」を必要な分だけ簡潔に示す。
+以前の成功を、今回変更したコードの検証結果として流用しない。
+再発防止の知見はこのファイルに集約する。
+ルート `AGENTS.md`、専用 Skill の入口、README のリンクを保つ。
+公式 Aspire Skills は CLI 更新時に上書きされるため、ローカル知識を追記しない。
