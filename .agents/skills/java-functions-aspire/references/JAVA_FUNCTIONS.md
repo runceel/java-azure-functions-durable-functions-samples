@@ -76,6 +76,7 @@ aspire docs api search "AddDurableTaskScheduler" --language csharp
 | `WithHttpEndpoint(port: 7076, targetPort: 7071, name: "http")` | 最小 Durable Functions の公開 7076 と Core Tools の内部 7071 を分離する |
 | 統合 AppHost の HTTP/CSV/Durable ports | CheckFile は公開 7072 / Core Tools 7073、CSV は公開 7075 / Core Tools 7074、minimal Durable は公開 7076 / Core Tools 7071。公開 port と内部 targetPort を同値にしない |
 | Azurite の接続文字列 | コードへ開発キーを埋め込まず、`storage.AddBlobs("blobs")` の `ConnectionStringExpression` を `AzureWebJobsStorage` / Java SDK 用環境変数へ渡す。`UseDevelopmentStorage=true` は Functions host のみが利用できる簡略形として扱う |
+| Queue trigger の encoding | QueueSender と Functions host の `extensions.queues.messageEncoding` を揃える。Azurite の plain String を送る場合は Azure Queue SDK `QueueMessageEncoding.None` と host.json の `"messageEncoding": "none"` を使用し、Base64/未指定と混在させない |
 | `WaitFor(storage)` / `WaitFor(scheduler)` | 依存サービスの準備を待つ。Functions host 自体の HTTP readiness は保証しない |
 | `AddDurableTaskScheduler(...).RunAsEmulator()` + `AddTaskHub("default")` | DTS 用。`ASPIREDURABLETASK001` は該当 API の範囲でのみ抑制する |
 | `DURABLE_TASK_SCHEDULER_CONNECTION_STRING` に task hub の `ConnectionStringExpression` | 動的な gRPC 接続先と hub を正しく渡す。過去のポートや管理画面 URL を使わない |

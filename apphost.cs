@@ -3,10 +3,12 @@
 #:package Aspire.Hosting.Java@13.6.0-preview.1.26479.8
 #:package Aspire.Hosting.PostgreSQL@13.6.1
 #:package Azure.Storage.Blobs@12.29.2
+#:package Azure.Storage.Queues@12.28.1
 #:sdk Aspire.AppHost.Sdk@13.6.1
 #:property AspireUseCliBundle=true
 
 using Azure.Storage.Blobs;
+using Azure.Storage.Queues;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,6 +23,77 @@ var storage = builder.AddAzureStorage("storage")
             .WithTablePort(10002);
     });
 var blobs = storage.AddBlobs("blobs");
+var queues = storage.AddQueues("queues");
+queues.WithCommand(
+    "send-message",
+    "Send queue message",
+    async context =>
+    {
+        var message = context.Arguments.GetString("message");
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return new ExecuteCommandResult
+            {
+                Success = false,
+                Message = "Message is required.",
+            };
+        }
+
+        try
+        {
+            var connectionString = await ((IResourceWithConnectionString)queues.Resource)
+                .GetConnectionStringAsync(context.CancellationToken);
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return new ExecuteCommandResult
+                {
+                    Success = false,
+                    Message = "Queue connection string is unavailable.",
+                };
+            }
+
+            var client = new QueueClient(
+                connectionString,
+                "http-check-file",
+                new QueueClientOptions
+                {
+                    MessageEncoding = QueueMessageEncoding.None,
+                });
+            await client.CreateIfNotExistsAsync(cancellationToken: context.CancellationToken);
+            await client.SendMessageAsync(message, cancellationToken: context.CancellationToken);
+
+            return new ExecuteCommandResult
+            {
+                Success = true,
+                Message = "Queue message sent.",
+            };
+        }
+        catch (Exception exception)
+        {
+            return new ExecuteCommandResult
+            {
+                Success = false,
+                Message = exception.Message,
+            };
+        }
+    },
+    new CommandOptions
+    {
+        IconName = "Send",
+        Arguments =
+        [
+            new InteractionInput
+            {
+                Name = "message",
+                Label = "Message",
+                InputType = InputType.Text,
+                Required = true,
+                Placeholder = "Enter a message for LogQueueMessage",
+                Value = "Queue trigger test message",
+                MaxLength = 1024,
+            },
+        ],
+    });
 blobs.OnResourceReady(async (resource, evt, ct) =>
 {
     var connectionString = await ((IResourceWithConnectionString)resource)
@@ -130,7 +203,8 @@ builder.AddJavaApp("http-check-file", httpFunctionsDirectory)
     .WithEnvironment("OTEL_TRACES_EXPORTER", "otlp")
     .WithEnvironment("OTEL_METRICS_EXPORTER", "none")
     .WithEnvironment("OTEL_LOGS_EXPORTER", "none")
-    .WithEnvironment("AzureWebJobsStorage", "UseDevelopmentStorage=true")
+    .WithEnvironment("AzureWebJobsStorage", blobs.Resource.ConnectionStringExpression)
+    .WithEnvironment("QueueStorage", queues.Resource.ConnectionStringExpression)
     .WaitFor(storage);
 
 var durableFunctionsDirectory = System.IO.Path.GetFullPath(".\\samples\\durable-functions");
