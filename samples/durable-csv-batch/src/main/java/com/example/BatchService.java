@@ -25,6 +25,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * CSV ページの分割、Blob 参照、PostgreSQL への冪等な登録を担当します。
+ */
 public class BatchService {
     private static final String INPUT_CONTAINER = "batch-inputs";
     private static final String PAGE_CONTAINER = "batch-pages";
@@ -35,6 +38,12 @@ public class BatchService {
             .build();
     private static final CSVFormat OUTPUT_CSV_FORMAT = CSVFormat.DEFAULT;
 
+    /**
+     * 入力 CSV を検証し、設定ページサイズごとの Blob に分割します。
+     *
+     * @param input バッチ実行パラメーター
+     * @return 分割したページ参照を含む処理計画
+     */
     public BatchPlan preparePages(BatchInput input) {
         BlobServiceClient service = blobService();
         BlobContainerClient inputContainer = service.getBlobContainerClient(INPUT_CONTAINER);
@@ -51,6 +60,7 @@ public class BatchService {
                 new java.io.InputStreamReader(inputBlob.openInputStream(), StandardCharsets.UTF_8));
              CSVParser parser = INPUT_CSV_FORMAT.parse(reader)) {
             Map<String, Integer> headers = parser.getHeaderMap();
+            // このサンプルが扱える列名を明示的に検証します。
             if (headers == null || !headers.containsKey("id") || !headers.containsKey("name")) {
                 throw new IllegalArgumentException("CSV must contain id and name columns.");
             }
@@ -75,10 +85,18 @@ public class BatchService {
         return plan;
     }
 
+    /**
+     * ページを PostgreSQL トランザクション内で1回だけ登録します。
+     * 完了済みページは保存済み件数を返し、再実行時の重複登録を防ぎます。
+     *
+     * @param page 処理対象ページ
+     * @return ページの成功件数と失敗件数
+     */
     public PageResult importPageOnce(PageRef page) {
         try (Connection connection = databaseConnection()) {
             connection.setAutoCommit(false);
             createSchema(connection);
+            // -1 の完了マーカーは処理中または失敗中を表し、再実行時は同じ結果を再利用します。
             if (!claimPage(connection, page)) {
                 PageResult existing = readPageResult(connection, page);
                 connection.commit();
@@ -117,6 +135,15 @@ public class BatchService {
         return page;
     }
 
+    /**
+     * ページ Blob の CSV を読み、正常行と検証エラー行を分類します。
+     *
+     * @param connection 登録先 PostgreSQL 接続
+     * @param page 処理対象ページ
+     * @return 正常件数と検証失敗件数
+     * @throws IOException ページ CSV の読み取りに失敗した場合
+     * @throws SQLException 登録処理に失敗した場合
+     */
     private PageResult importRows(Connection connection, PageRef page)
             throws IOException, SQLException {
         BlobClient blob = blobService().getBlobContainerClient(PAGE_CONTAINER)
@@ -151,6 +178,12 @@ public class BatchService {
         return result;
     }
 
+    /**
+     * 文字列が正の整数として解釈できるかを確認します。
+     *
+     * @param value 変換対象の文字列
+     * @return 正の整数、または変換不能または 0 以下の場合は {@code null}
+     */
     private static Integer parsePositiveInteger(String value) {
         try {
             int parsed = Integer.parseInt(value);
@@ -160,6 +193,13 @@ public class BatchService {
         }
     }
 
+    /**
+     * CSV レコードを元の行形式に近い文字列へ変換します。
+     *
+     * @param record CSV レコード
+     * @return CSV 形式の文字列
+     * @throws IOException CSV 出力に失敗した場合
+     */
     private static String csvRow(CSVRecord record) throws IOException {
         try (StringWriter text = new StringWriter();
              CSVPrinter printer = new CSVPrinter(text, OUTPUT_CSV_FORMAT)) {

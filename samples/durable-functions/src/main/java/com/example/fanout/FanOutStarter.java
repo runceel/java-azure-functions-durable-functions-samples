@@ -10,7 +10,17 @@ import com.microsoft.azure.functions.annotation.HttpTrigger;
 import com.microsoft.durabletask.azurefunctions.DurableClientContext;
 import com.microsoft.durabletask.azurefunctions.DurableClientInput;
 
+/**
+ * fan-out/fan-in パターンを開始する HTTP Durable Functions の Starter です。
+ */
 public class FanOutStarter {
+    /**
+     * Activity の実行数を検証し、有効な場合はオーケストレーションを開始します。
+     *
+     * @param request 本文に Activity 数を含む HTTP POST リクエスト
+     * @param durableContext Durable クライアントとステータス API を生成するコンテキスト
+     * @return 正常時はステータス確認レスポンス、無効な件数時は 400 レスポンス
+     */
     @FunctionName("StartFanOut")
     public HttpResponseMessage startFanOut(
             @HttpTrigger(
@@ -25,6 +35,7 @@ public class FanOutStarter {
         if (count == null) {
             count = 5;
         }
+        // 想定外の件数による過剰な並列実行を避けるため、範囲を限定します。
         if (count < 1 || count > 20) {
             return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
                     .body("The item count must be between 1 and 20.")
