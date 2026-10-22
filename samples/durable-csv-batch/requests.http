@@ -1,4 +1,4 @@
-@baseUrl = http://localhost:7072
+@baseUrl = http://localhost:7075
 @batchId = workshop-001
 
 ### Start the CSV batch

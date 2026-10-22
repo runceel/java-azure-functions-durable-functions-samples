@@ -49,6 +49,7 @@
                 </executions>
                 <configuration>
                     <appName>http-check-file</appName>
+                    <funcPort>7073</funcPort>
                     <resourceGroup>java-functions-group</resourceGroup>
                     <appServicePlanName>java-functions-app-service-plan</appServicePlanName>
                     <region>westus2</region>

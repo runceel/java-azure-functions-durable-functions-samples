@@ -17,6 +17,7 @@ var storage = builder.AddAzureStorage("storage")
             .WithQueuePort(10001)
             .WithTablePort(10002);
     });
+var blobs = storage.AddBlobs("blobs");
 
 var scheduler = builder.AddDurableTaskScheduler("scheduler")
     .RunAsEmulator();
@@ -59,25 +60,18 @@ if (!System.IO.File.Exists(System.IO.Path.Combine(functionsDirectory, "pom.xml")
 }
 var path = Environment.GetEnvironmentVariable("PATH")
     ?? throw new InvalidOperationException("The PATH environment variable is required.");
-const string storageConnectionString =
-    "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;" +
-    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;" +
-    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" +
-    "QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;" +
-    "TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;";
-
 builder.AddJavaApp("durable-csv-batch", functionsDirectory)
     .WithMavenGoal("package", "azure-functions:run")
     .WithArgs("-DenableDebug")
     .WithWrapperPath(System.IO.Path.Combine(
         functionsDirectory,
         OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"))
-    .WithHttpEndpoint(port: 7072, targetPort: 7071, name: "http")
+    .WithHttpEndpoint(port: 7072, targetPort: 7074, name: "http")
     .WithEnvironment(
         "PATH",
         $"{functionsDirectory}{System.IO.Path.PathSeparator.ToString()}{path}")
-    .WithEnvironment("AzureWebJobsStorage", storageConnectionString)
-    .WithEnvironment("AZURE_STORAGE_CONNECTION_STRING", storageConnectionString)
+    .WithEnvironment("AzureWebJobsStorage", blobs.Resource.ConnectionStringExpression)
+    .WithEnvironment("AZURE_STORAGE_CONNECTION_STRING", blobs.Resource.ConnectionStringExpression)
     .WithEnvironment(
         "DURABLE_TASK_SCHEDULER_CONNECTION_STRING",
         taskHub.Resource.ConnectionStringExpression)

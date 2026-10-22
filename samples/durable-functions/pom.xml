@@ -55,6 +55,7 @@
                 </executions>
                 <configuration>
                     <appName>durable-functions-minimal</appName>
+                    <funcPort>7071</funcPort>
                     <resourceGroup>java-functions-group</resourceGroup>
                     <appServicePlanName>java-functions-app-service-plan</appServicePlanName>
                     <region>westus2</region>

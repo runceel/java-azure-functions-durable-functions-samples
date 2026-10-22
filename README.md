@@ -11,6 +11,10 @@ kept unchanged because CLI updates may overwrite them.
 
 ## Minimal Durable Functions sample
 
+Running the root `apphost.cs` starts the full local sample set in one Aspire
+application: HTTP CheckFile, minimal Durable Functions, Durable CSV batch,
+Azurite, DTS emulator, and PostgreSQL.
+
 This sample starts a Java Azure Functions host, Azurite, and the Durable Task Scheduler
 emulator through Aspire.
 
@@ -27,9 +31,15 @@ From the repository root:
 
 ```powershell
 aspire start --non-interactive --apphost .\apphost.cs
+aspire wait http-check-file --non-interactive --apphost .\apphost.cs
 aspire wait durable-functions --non-interactive --apphost .\apphost.cs
-aspire logs durable-functions --non-interactive --apphost .\apphost.cs
+aspire wait durable-csv-batch --non-interactive --apphost .\apphost.cs
 ```
+
+The Functions hosts use separate ports: CheckFile is published at
+`http://localhost:7072`, the minimal Durable sample uses its Aspire endpoint,
+and the CSV batch is published at `http://localhost:7075`. Each host runs on a
+different internal Functions Core Tools port.
 
 `Healthy` can be reported while Maven is still building. Confirm that the Functions
 host has discovered `StartHello`, `HelloOrchestration`, and `SayHello`, and has not
@@ -102,13 +112,10 @@ Then send a request from `samples\durable-csv-batch\requests.http` to hit the
 breakpoint. The debug listener is for local development only.
 
 Create the input container and upload the included CSV to the local Azurite instance.
-The Azurite development account/key and ports below are local emulator defaults only:
-
-```powershell
-$storage = 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;'
-az storage container create --name batch-inputs --connection-string $storage
-az storage blob upload --container-name batch-inputs --name sample-input.csv --file .\samples\durable-csv-batch\sample-input.csv --connection-string $storage --overwrite
-```
+Use Azure Storage Explorer connected to the local Azurite emulator to create the
+`batch-inputs` container and upload `sample.csv`. Aspire supplies the Java app with the
+emulator connection string at runtime, so no development account key is duplicated in
+repository code.
 
 Upload the input as above, then open
 `samples\durable-csv-batch\requests.http`. Run **Start the CSV batch**, then run

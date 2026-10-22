@@ -74,10 +74,12 @@ aspire docs api search "AddDurableTaskScheduler" --language csharp
 | OS に合う `mvnw.cmd` / `mvnw` を `WithWrapperPath` に渡す | グローバル Maven に依存させない |
 | Functions ディレクトリを既存 PATH の先頭に追加 | 検証した preview は wrapper path の指定後も Windows で `cmd /c call mvnw.cmd` を生成した。この環境では名前だけだと見つからず、`.\mvnw.cmd` は成功した |
 | `WithHttpEndpoint(targetPort: 7071, name: "http")` | Core Tools が使う内部 7071 を指定し、ホスト側は Aspire が動的割当。`port: 7071` だけだと Aspire proxy が同じポートを確保し競合する |
-| `AzureWebJobsStorage=UseDevelopmentStorage=true` | Azurite の標準 Blob/Queue/Table ポート 10000/10001/10002 と対応。片方だけ変更しない |
+| 統合 AppHost の HTTP/CVS/Durable ports | CheckFile は公開 7072 / Core Tools 7073、CSV は公開 7075 / Core Tools 7074、minimal Durable は公開は動的 / Core Tools 7071。公開 port と内部 targetPort を同値にしない |
+| Azurite の接続文字列 | コードへ開発キーを埋め込まず、`storage.AddBlobs("blobs")` の `ConnectionStringExpression` を `AzureWebJobsStorage` / Java SDK 用環境変数へ渡す。`UseDevelopmentStorage=true` は Functions host のみが利用できる簡略形として扱う |
 | `WaitFor(storage)` / `WaitFor(scheduler)` | 依存サービスの準備を待つ。Functions host 自体の HTTP readiness は保証しない |
 | `AddDurableTaskScheduler(...).RunAsEmulator()` + `AddTaskHub("default")` | DTS 用。`ASPIREDURABLETASK001` は該当 API の範囲でのみ抑制する |
 | `DURABLE_TASK_SCHEDULER_CONNECTION_STRING` に task hub の `ConnectionStringExpression` | 動的な gRPC 接続先と hub を正しく渡す。過去のポートや管理画面 URL を使わない |
+| Task Hub resource の `auto-connect` URL | `OnResourceReady` で `/subscriptions/default/schedulers/default/taskhubs/{hub}?endpoint={dashboardUrl}` を URL 表示へ追加し、DTS Dashboard を接続設定画面ではなく該当 hub に直接開く |
 
 `host.json` は `durableTask.hubName=default`、
 `storageProvider.type=azureManaged`、

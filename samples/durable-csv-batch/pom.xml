@@ -73,6 +73,7 @@
                 </executions>
                 <configuration>
                     <appName>durable-csv-batch</appName>
+                    <funcPort>7074</funcPort>
                     <resourceGroup>java-functions-group</resourceGroup>
                     <appServicePlanName>java-functions-app-service-plan</appServicePlanName>
                     <region>westus2</region>

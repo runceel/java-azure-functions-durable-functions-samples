@@ -17,7 +17,7 @@ builder.AddJavaApp("http-check-file", functionsDirectory)
     .WithWrapperPath(System.IO.Path.Combine(
         functionsDirectory,
         OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"))
-    .WithHttpEndpoint(port: 7072, targetPort: 7071, name: "http")
+    .WithHttpEndpoint(port: 7072, targetPort: 7073, name: "http")
     .WithEnvironment(
         "PATH",
         $"{functionsDirectory}{System.IO.Path.PathSeparator.ToString()}{path}");
