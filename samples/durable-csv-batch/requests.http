@@ -9,7 +9,7 @@ Content-Type: application/json
 {
   "batchId": "{{batchId}}",
   "blobName": "sample-input.csv",
-  "pageSize": 2,
+  "pageSize": 50,
   "maxParallel": 2
 }
 
