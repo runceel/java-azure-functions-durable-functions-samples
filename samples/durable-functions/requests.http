@@ -1,0 +1,18 @@
+@baseUrl = http://localhost:7076
+
+### Start the three-step sequential orchestration
+# @name startSequential
+POST {{baseUrl}}/api/orchestrations/hello
+
+### Check the sequential orchestration status
+GET {{startSequential.response.body.$.statusQueryGetUri}}
+
+### Start the fan-out/fan-in orchestration
+# @name startFanOut
+POST {{baseUrl}}/api/orchestrations/fan-out
+Content-Type: application/json
+
+5
+
+### Check the fan-out/fan-in orchestration status
+GET {{startFanOut.response.body.$.statusQueryGetUri}}

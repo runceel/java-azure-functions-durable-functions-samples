@@ -15,6 +15,9 @@
         <azure.functions.maven.plugin.version>1.42.0</azure.functions.maven.plugin.version>
         <azure.functions.java.library.version>3.3.0</azure.functions.java.library.version>
         <durabletask.azure.functions.version>1.9.0</durabletask.azure.functions.version>
+        <functionAppName>durable-functions-minimal</functionAppName>
+        <opentelemetry.javaagent.version>2.11.0</opentelemetry.javaagent.version>
+        <opentelemetry.api.version>1.49.0</opentelemetry.api.version>
     </properties>
 
     <dependencies>
@@ -27,6 +30,16 @@
             <groupId>com.microsoft</groupId>
             <artifactId>durabletask-azure-functions</artifactId>
             <version>${durabletask.azure.functions.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.azure.functions</groupId>
+            <artifactId>azure-functions-java-opentelemetry</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <version>${opentelemetry.api.version}</version>
         </dependency>
     </dependencies>
 
@@ -64,6 +77,32 @@
                         <javaVersion>11</javaVersion>
                     </runtime>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>copy-otel-agent</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>io.opentelemetry.javaagent</groupId>
+                                    <artifactId>opentelemetry-javaagent</artifactId>
+                                    <version>${opentelemetry.javaagent.version}</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/azure-functions/${functionAppName}</outputDirectory>
+                                    <destFileName>opentelemetry-javaagent.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

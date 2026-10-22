@@ -33,7 +33,12 @@ Skill がツールで読み込めない環境では、このリポジトリ内�
 | `aspire.config.json` / `apphost.run.json` | CLI の AppHost 選択・起動設定 |
 | `samples\durable-functions\pom.xml` | Java 依存関係、Functions の package/run |
 | `samples\durable-functions\host.json` | Durable の `azureManaged` provider と extension bundle |
-| `samples\durable-functions\src\main\java\com\example\Functions.java` | `StartHello` → `HelloOrchestration` → `SayHello` |
+| `samples\durable-functions\src\main\java\com\example\hello\HelloStarter.java` | Hello 順次パターンの HTTP Starter |
+| `samples\durable-functions\src\main\java\com\example\hello\HelloOrchestrator.java` | 3 Activity の順次実行オーケストレーター |
+| `samples\durable-functions\src\main\java\com\example\hello\HelloActivities.java` | Hello 順次パターンの Activity |
+| `samples\durable-functions\src\main\java\com\example\fanout\FanOutStarter.java` | fan-out/fan-in パターンの HTTP Starter |
+| `samples\durable-functions\src\main\java\com\example\fanout\FanOutOrchestrator.java` | fan-out/fan-in オーケストレーター |
+| `samples\durable-functions\src\main\java\com\example\fanout\FanOutActivity.java` | fan-out/fan-in の Activity |
 | `samples\http-check-file` | Workshop HTTP `CheckFile` function and `apphost.cs` |
 | `samples\durable-csv-batch` | Workshop CSV split/import with Durable, Azurite, PostgreSQL and `apphost.cs` |
 | `storage` | Azurite。Blob 10000、Queue 10001、Table 10002 |
@@ -60,8 +65,8 @@ Activity で処理して PostgreSQL に登録する例です。Queue トリガ�
 - `aspire wait` の `Healthy` は Maven プロセス起動の段階でも返る。
   **Functions host のログ、HTTP 応答、Durable の `Completed` と期待出力まで確認する。**
 - Windows の Maven Wrapper 用 PATH、`package` → `azure-functions:run` の順序、
-  `targetPort: 7071` を維持する。Workshop AppHost は `.http` 用に公開ポート `7072` を固定し、
-  最小 Durable AppHost は動的なホスト側ポートを使う。
+  `targetPort: 7071` を維持する。統合 AppHost の公開ポートは CheckFile が `7072`、
+  CSV が `7075`、最小 Durable が `7076`。公開 port と内部 targetPort を同値にしない。
 - スケジューラの接続先は task hub の `ConnectionStringExpression` から渡す。
   過去の実行で得た動的 URL・ポート・管理用キーをコードやドキュメントに固定しない。
 - 未知の Aspire API は CLI の docs/API 検索で確認する。

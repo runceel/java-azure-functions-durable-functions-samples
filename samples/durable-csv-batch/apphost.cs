@@ -2,10 +2,13 @@
 #:package Aspire.Hosting.Azure.Storage@13.6.1
 #:package Aspire.Hosting.Java@13.6.0-preview.1.26479.8
 #:package Aspire.Hosting.PostgreSQL@13.6.1
+#:package Azure.Storage.Blobs@12.29.2
 #:sdk Aspire.AppHost.Sdk@13.6.1
 #:property AspireUseCliBundle=true
 
+using Azure.Storage.Blobs;
 using Microsoft.Extensions.DependencyInjection;
+using Aspire.Hosting.ApplicationModel;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -18,6 +21,37 @@ var storage = builder.AddAzureStorage("storage")
             .WithTablePort(10002);
     });
 var blobs = storage.AddBlobs("blobs");
+blobs.OnResourceReady(async (resource, evt, ct) =>
+{
+    var connectionString = await ((IResourceWithConnectionString)resource)
+        .GetConnectionStringAsync(ct);
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        throw new InvalidOperationException(
+            "Unable to resolve the Azurite blob connection string.");
+    }
+
+    var samplePath = System.IO.Path.GetFullPath(
+        System.IO.Path.Combine(
+            System.IO.Directory.GetCurrentDirectory(),
+            "sample-input.csv"));
+    if (!System.IO.File.Exists(samplePath))
+    {
+        samplePath = System.IO.Path.GetFullPath(
+            ".\\samples\\durable-csv-batch\\sample-input.csv");
+    }
+    if (!System.IO.File.Exists(samplePath))
+    {
+        throw new FileNotFoundException(
+            "The CSV seed file was not found.", samplePath);
+    }
+
+    var client = new BlobServiceClient(connectionString);
+    var container = client.GetBlobContainerClient("batch-inputs");
+    await container.CreateIfNotExistsAsync(cancellationToken: ct);
+    await container.GetBlobClient("sample-input.csv")
+        .UploadAsync(samplePath, overwrite: true, cancellationToken: ct);
+});
 
 var scheduler = builder.AddDurableTaskScheduler("scheduler")
     .RunAsEmulator();
@@ -50,7 +84,8 @@ taskHub.OnResourceReady(async (resource, evt, ct) =>
     }).ConfigureAwait(false);
 });
 var postgres = builder.AddPostgres("postgres")
-    .WithDataVolume();
+    .WithDataVolume()
+    .WithPgAdmin();
 var database = postgres.AddDatabase("batchdb", "workshop");
 
 var functionsDirectory = System.IO.Path.GetFullPath(".");
@@ -58,8 +93,15 @@ if (!System.IO.File.Exists(System.IO.Path.Combine(functionsDirectory, "pom.xml")
 {
     functionsDirectory = System.IO.Path.GetFullPath(".\\samples\\durable-csv-batch");
 }
-var path = Environment.GetEnvironmentVariable("PATH")
+var inheritedPath = Environment.GetEnvironmentVariable("PATH")
     ?? throw new InvalidOperationException("The PATH environment variable is required.");
+var agentPath = System.IO.Path.GetFullPath(
+    System.IO.Path.Combine(
+        functionsDirectory,
+        "target",
+        "azure-functions",
+        "durable-csv-batch",
+        "opentelemetry-javaagent.jar"));
 builder.AddJavaApp("durable-csv-batch", functionsDirectory)
     .WithMavenGoal("package", "azure-functions:run")
     .WithArgs("-DenableDebug")
@@ -69,7 +111,9 @@ builder.AddJavaApp("durable-csv-batch", functionsDirectory)
     .WithHttpEndpoint(port: 7072, targetPort: 7074, name: "http")
     .WithEnvironment(
         "PATH",
-        $"{functionsDirectory}{System.IO.Path.PathSeparator.ToString()}{path}")
+        $"{functionsDirectory}{System.IO.Path.PathSeparator.ToString()}{inheritedPath}")
+    .WithEnvironment("JAVA_OPTS", $"-javaagent:\"{agentPath}\" -Dotel.instrumentation.grpc.enabled=false")
+    .WithEnvironment("OTEL_TRACES_EXPORTER", "otlp")
     .WithEnvironment("AzureWebJobsStorage", blobs.Resource.ConnectionStringExpression)
     .WithEnvironment("AZURE_STORAGE_CONNECTION_STRING", blobs.Resource.ConnectionStringExpression)
     .WithEnvironment(

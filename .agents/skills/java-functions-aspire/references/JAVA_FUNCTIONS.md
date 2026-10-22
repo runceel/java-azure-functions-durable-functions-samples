@@ -72,13 +72,15 @@ aspire docs api search "AddDurableTaskScheduler" --language csharp
 |---|---|
 | `AddJavaApp` + `WithMavenGoal("package", "azure-functions:run")` | Java Functions は Maven プラグイン経由で Core Tools を起動する。`run` だけでは初回の staging directory がない |
 | OS に合う `mvnw.cmd` / `mvnw` を `WithWrapperPath` に渡す | グローバル Maven に依存させない |
-| Functions ディレクトリを既存 PATH の先頭に追加 | 検証した preview は wrapper path の指定後も Windows で `cmd /c call mvnw.cmd` を生成した。この環境では名前だけだと見つからず、`.\mvnw.cmd` は成功した |
-| `WithHttpEndpoint(targetPort: 7071, name: "http")` | Core Tools が使う内部 7071 を指定し、ホスト側は Aspire が動的割当。`port: 7071` だけだと Aspire proxy が同じポートを確保し競合する |
-| 統合 AppHost の HTTP/CVS/Durable ports | CheckFile は公開 7072 / Core Tools 7073、CSV は公開 7075 / Core Tools 7074、minimal Durable は公開は動的 / Core Tools 7071。公開 port と内部 targetPort を同値にしない |
+| Functions ディレクトリを既存 PATH の先頭に追加 | 現在の preview/Windowsでは `WithWrapperPath` と併用しても `mvnw.cmd` の名前解決が失敗するため、この PATH 回避策を維持する。Maven Wrapper/FunctionsディレクトリをPATH先頭へ追加し、元のPATHを後続へ残す |
+| `WithHttpEndpoint(port: 7076, targetPort: 7071, name: "http")` | 最小 Durable Functions の公開 7076 と Core Tools の内部 7071 を分離する |
+| 統合 AppHost の HTTP/CSV/Durable ports | CheckFile は公開 7072 / Core Tools 7073、CSV は公開 7075 / Core Tools 7074、minimal Durable は公開 7076 / Core Tools 7071。公開 port と内部 targetPort を同値にしない |
 | Azurite の接続文字列 | コードへ開発キーを埋め込まず、`storage.AddBlobs("blobs")` の `ConnectionStringExpression` を `AzureWebJobsStorage` / Java SDK 用環境変数へ渡す。`UseDevelopmentStorage=true` は Functions host のみが利用できる簡略形として扱う |
 | `WaitFor(storage)` / `WaitFor(scheduler)` | 依存サービスの準備を待つ。Functions host 自体の HTTP readiness は保証しない |
 | `AddDurableTaskScheduler(...).RunAsEmulator()` + `AddTaskHub("default")` | DTS 用。`ASPIREDURABLETASK001` は該当 API の範囲でのみ抑制する |
 | `DURABLE_TASK_SCHEDULER_CONNECTION_STRING` に task hub の `ConnectionStringExpression` | 動的な gRPC 接続先と hub を正しく渡す。過去のポートや管理画面 URL を使わない |
+| OpenTelemetry の Java 計装 | 各POMへ `azure-functions-java-opentelemetry:1.1.0`、`opentelemetry-api:1.49.0`、agent 2.11.0のpackageコピーを追加し、各 `host.json`へ `"telemetryMode": "OpenTelemetry"`を設定する。Aspire resourceへ `JAVA_OPTS=-javaagent:<staging>/opentelemetry-javaagent.jar`を渡す |
+| Durable Task の gRPC計装競合 | OTel agent 2.11.0でgRPC helperのClassNotFoundが出る場合、`JAVA_OPTS`に `-Dotel.instrumentation.grpc.enabled=false`を付ける。HTTP/Functions/Durable serviceのtrace自体はこの設定でも保持され、gRPC自動計装のみ無効化する |
 | Task Hub resource の `auto-connect` URL | `OnResourceReady` で `/subscriptions/default/schedulers/default/taskhubs/{hub}?endpoint={dashboardUrl}` を URL 表示へ追加し、DTS Dashboard を接続設定画面ではなく該当 hub に直接開く |
 
 `host.json` は `durableTask.hubName=default`、
@@ -206,6 +208,7 @@ CSV は `id,name` ヘッダーを持ち、`id` は正の整数、`name` は空�
 
 | 症状 | 確認・対処 |
 |---|---|
+| PATH簡略化後に `mvnw.cmd` が認識されない | `mvnw.cmd` を`WithWrapperPath`で指定していてもWindows/Aspire previewではFunctionsディレクトリを子プロセスのPATH先頭へ追加する回避策が必要 |
 | `mvnw.cmd` が見つからず `Finished` | wrapper の存在と workDir、resource の PATH を確認。プロジェクトから `.\mvnw.cmd -v` で切り分ける |
 | `Stage directory not found. Please run mvn package first.` | `package` を先に実行し、plugin の package execution があることを確認 |
 | Durable の3注釈を解決できない | `com.microsoft.durabletask.azurefunctions` から import。SDK の依存 group/artifact も確認 |

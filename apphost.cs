@@ -2,9 +2,12 @@
 #:package Aspire.Hosting.Azure.Storage@13.6.1
 #:package Aspire.Hosting.Java@13.6.0-preview.1.26479.8
 #:package Aspire.Hosting.PostgreSQL@13.6.1
+#:package Azure.Storage.Blobs@12.29.2
 #:sdk Aspire.AppHost.Sdk@13.6.1
 #:property AspireUseCliBundle=true
 
+using Azure.Storage.Blobs;
+using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -18,6 +21,30 @@ var storage = builder.AddAzureStorage("storage")
             .WithTablePort(10002);
     });
 var blobs = storage.AddBlobs("blobs");
+blobs.OnResourceReady(async (resource, evt, ct) =>
+{
+    var connectionString = await ((IResourceWithConnectionString)resource)
+        .GetConnectionStringAsync(ct);
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        throw new InvalidOperationException(
+            "Unable to resolve the Azurite blob connection string.");
+    }
+
+    var samplePath = System.IO.Path.GetFullPath(
+        ".\\samples\\durable-csv-batch\\sample-input.csv");
+    if (!System.IO.File.Exists(samplePath))
+    {
+        throw new FileNotFoundException(
+            "The CSV seed file was not found.", samplePath);
+    }
+
+    var client = new BlobServiceClient(connectionString);
+    var container = client.GetBlobContainerClient("batch-inputs");
+    await container.CreateIfNotExistsAsync(cancellationToken: ct);
+    await container.GetBlobClient("sample-input.csv")
+        .UploadAsync(samplePath, overwrite: true, cancellationToken: ct);
+});
 
 var scheduler = builder.AddDurableTaskScheduler("scheduler")
     .RunAsEmulator();
@@ -51,9 +78,6 @@ taskHub.OnResourceReady(async (resource, evt, ct) =>
     }).ConfigureAwait(false);
 });
 
-var path = Environment.GetEnvironmentVariable("PATH")
-    ?? throw new InvalidOperationException("The PATH environment variable is required.");
-
 var workshopTaskHub = scheduler.AddTaskHub("workshop");
 workshopTaskHub.OnResourceReady(async (resource, evt, ct) =>
 {
@@ -84,10 +108,15 @@ workshopTaskHub.OnResourceReady(async (resource, evt, ct) =>
 });
 
 var postgres = builder.AddPostgres("postgres")
-    .WithDataVolume();
+    .WithDataVolume()
+    .WithPgAdmin();
 var database = postgres.AddDatabase("batchdb", "workshop");
+var inheritedPath = Environment.GetEnvironmentVariable("PATH")
+    ?? throw new InvalidOperationException("The PATH environment variable is required.");
 
 var httpFunctionsDirectory = System.IO.Path.GetFullPath(".\\samples\\http-check-file");
+var httpAgentPath = System.IO.Path.GetFullPath(
+    ".\\samples\\http-check-file\\target\\azure-functions\\http-check-file\\opentelemetry-javaagent.jar");
 builder.AddJavaApp("http-check-file", httpFunctionsDirectory)
     .WithMavenGoal("package", "azure-functions:run")
     .WithWrapperPath(System.IO.Path.Combine(
@@ -96,20 +125,30 @@ builder.AddJavaApp("http-check-file", httpFunctionsDirectory)
     .WithHttpEndpoint(port: 7072, targetPort: 7073, name: "http")
     .WithEnvironment(
         "PATH",
-        $"{httpFunctionsDirectory}{System.IO.Path.PathSeparator.ToString()}{path}")
+        $"{httpFunctionsDirectory}{System.IO.Path.PathSeparator.ToString()}{inheritedPath}")
+    .WithEnvironment("JAVA_OPTS", $"-javaagent:\"{httpAgentPath}\"")
+    .WithEnvironment("OTEL_TRACES_EXPORTER", "otlp")
+    .WithEnvironment("OTEL_METRICS_EXPORTER", "none")
+    .WithEnvironment("OTEL_LOGS_EXPORTER", "none")
     .WithEnvironment("AzureWebJobsStorage", "UseDevelopmentStorage=true")
     .WaitFor(storage);
 
 var durableFunctionsDirectory = System.IO.Path.GetFullPath(".\\samples\\durable-functions");
+var durableAgentPath = System.IO.Path.GetFullPath(
+    ".\\samples\\durable-functions\\target\\azure-functions\\durable-functions-minimal\\opentelemetry-javaagent.jar");
 builder.AddJavaApp("durable-functions", durableFunctionsDirectory)
     .WithMavenGoal("package", "azure-functions:run")
     .WithWrapperPath(System.IO.Path.Combine(
         durableFunctionsDirectory,
         OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"))
-    .WithHttpEndpoint(targetPort: 7071, name: "http")
+    .WithHttpEndpoint(port: 7076, targetPort: 7071, name: "http")
     .WithEnvironment(
         "PATH",
-        $"{durableFunctionsDirectory}{System.IO.Path.PathSeparator.ToString()}{path}")
+        $"{durableFunctionsDirectory}{System.IO.Path.PathSeparator.ToString()}{inheritedPath}")
+    .WithEnvironment("JAVA_OPTS", $"-javaagent:\"{durableAgentPath}\" -Dotel.instrumentation.grpc.enabled=false")
+    .WithEnvironment("OTEL_TRACES_EXPORTER", "otlp")
+    .WithEnvironment("OTEL_METRICS_EXPORTER", "none")
+    .WithEnvironment("OTEL_LOGS_EXPORTER", "none")
     .WithEnvironment("AzureWebJobsStorage", "UseDevelopmentStorage=true")
     .WithEnvironment(
         "DURABLE_TASK_SCHEDULER_CONNECTION_STRING",
@@ -118,6 +157,8 @@ builder.AddJavaApp("durable-functions", durableFunctionsDirectory)
     .WaitFor(scheduler);
 
 var csvFunctionsDirectory = System.IO.Path.GetFullPath(".\\samples\\durable-csv-batch");
+var csvAgentPath = System.IO.Path.GetFullPath(
+    ".\\samples\\durable-csv-batch\\target\\azure-functions\\durable-csv-batch\\opentelemetry-javaagent.jar");
 builder.AddJavaApp("durable-csv-batch", csvFunctionsDirectory)
     .WithMavenGoal("package", "azure-functions:run")
     .WithArgs("-DenableDebug")
@@ -127,7 +168,11 @@ builder.AddJavaApp("durable-csv-batch", csvFunctionsDirectory)
     .WithHttpEndpoint(port: 7075, targetPort: 7074, name: "http")
     .WithEnvironment(
         "PATH",
-        $"{csvFunctionsDirectory}{System.IO.Path.PathSeparator.ToString()}{path}")
+        $"{csvFunctionsDirectory}{System.IO.Path.PathSeparator.ToString()}{inheritedPath}")
+    .WithEnvironment("JAVA_OPTS", $"-javaagent:\"{csvAgentPath}\" -Dotel.instrumentation.grpc.enabled=false")
+    .WithEnvironment("OTEL_TRACES_EXPORTER", "otlp")
+    .WithEnvironment("OTEL_METRICS_EXPORTER", "none")
+    .WithEnvironment("OTEL_LOGS_EXPORTER", "none")
     .WithEnvironment("AzureWebJobsStorage", blobs.Resource.ConnectionStringExpression)
     .WithEnvironment("AZURE_STORAGE_CONNECTION_STRING", blobs.Resource.ConnectionStringExpression)
     .WithEnvironment(

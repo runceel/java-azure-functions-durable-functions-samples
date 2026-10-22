@@ -1,33 +1,15 @@
 # java-azure-functions-durable-functions-samples
 
-## AI Agent guidance
+### 前提条件
 
-Start with [AGENTS.md](AGENTS.md), then read the repository-owned
-[java-functions-aspire skill](.agents/skills/java-functions-aspire/SKILL.md).
-Its [runbook](.agents/skills/java-functions-aspire/references/JAVA_FUNCTIONS.md)
-covers prerequisites, Java/Maven hosting, ordinary Functions additions, DTS wiring,
-readiness, end-to-end verification, and troubleshooting. Official Aspire skills are
-kept unchanged because CLI updates may overwrite them.
+- .NET 10 SDK と Aspire CLI
+- インストール済み JDK を指す `JAVA_HOME` を設定した JDK 11 以降
+- Azure Functions Core Tools v4（`func` を PATH に設定）
+- Linux コンテナーエンジンを使用する Docker Desktop
 
-## Minimal Durable Functions sample
+### 実行
 
-Running the root `apphost.cs` starts the full local sample set in one Aspire
-application: HTTP CheckFile, minimal Durable Functions, Durable CSV batch,
-Azurite, DTS emulator, and PostgreSQL.
-
-This sample starts a Java Azure Functions host, Azurite, and the Durable Task Scheduler
-emulator through Aspire.
-
-### Prerequisites
-
-- .NET 10 SDK and Aspire CLI
-- JDK 11 or later, with `JAVA_HOME` set to the installed JDK
-- Azure Functions Core Tools v4 (`func` on PATH)
-- Docker Desktop running with the Linux container engine
-
-### Run
-
-From the repository root:
+リポジトリルートから次を実行します。
 
 ```powershell
 aspire start --non-interactive --apphost .\apphost.cs
@@ -36,43 +18,20 @@ aspire wait durable-functions --non-interactive --apphost .\apphost.cs
 aspire wait durable-csv-batch --non-interactive --apphost .\apphost.cs
 ```
 
-The Functions hosts use separate ports: CheckFile is published at
-`http://localhost:7072`, the minimal Durable sample uses its Aspire endpoint,
-and the CSV batch is published at `http://localhost:7075`. Each host runs on a
-different internal Functions Core Tools port.
-
-`Healthy` can be reported while Maven is still building. Confirm that the Functions
-host has discovered `StartHello`, `HelloOrchestration`, and `SayHello`, and has not
-logged a startup failure. For foreground use, run `aspire run --apphost .\apphost.cs`.
-
-Start an orchestration:
+フォアグラウンドで実行する場合は、次を使用します。
 
 ```powershell
-$functions = (aspire describe --format Json --apphost .\apphost.cs | ConvertFrom-Json).resources |
-    Where-Object displayName -eq "durable-functions"
-$endpoint = $functions.urls |
-    Where-Object name -eq "http" |
-    Select-Object -ExpandProperty url
-$start = Invoke-RestMethod -Method Post -Uri "$endpoint/api/orchestrations/hello"
-$start
+aspire run --apphost .\apphost.cs
 ```
 
-Use the returned `statusQueryGetUri` to inspect the instance. When `runtimeStatus` is
-`Completed`, `output` is `Hello, "Durable Functions"!`. The Aspire dashboard also exposes
-the Durable Task Scheduler emulator dashboard.
+## ワークショップサンプル
 
-The quoted name is the observed output of the current SDK/binding combination.
-See the runbook for a bounded completion check that verifies the exact output.
-
-## Workshop samples
-
-The additional samples used by the Durable Functions Java workshop are independent of
-the minimal sample above. Run commands from the repository root. They use local
-emulators and do not require Azure sign-in or cloud resources.
+コマンドはリポジトリルートから実行してください。ローカル Emulator を使用するため、
+Azure へのサインインやクラウドリソースは不要です。
 
 ### HTTP `CheckFile`
 
-Build and run the standalone HTTP example:
+独立した HTTP サンプルをビルドして実行します。
 
 ```powershell
 .\samples\http-check-file\mvnw.cmd -B -ntp package
@@ -80,21 +39,45 @@ aspire start --non-interactive --apphost .\samples\http-check-file\apphost.cs
 aspire wait http-check-file --non-interactive --apphost .\samples\http-check-file\apphost.cs
 ```
 
-For runnable requests, open `samples\http-check-file\requests.http` in
-VS Code with the REST Client extension (or another editor that supports `.http`
-request files) and run either request. Aspire maps the Functions host's internal
-port 7071 to the stable local endpoint `http://localhost:7072`, which the request
-file uses. Core Tools does not enforce HTTP authorization locally by default,
-even when a function uses `AuthorizationLevel.FUNCTION`. Deployed functions still
-require a function key. To use another HTTP client, get the current Aspire endpoint
-from `aspire describe --format Json --apphost .\samples\http-check-file\apphost.cs`.
+リクエストを実行するには、VS Code の REST Client 拡張機能または `.http` ファイルを
+サポートするエディターで `samples\http-check-file\requests.http` を開き、いずれかの
+リクエストを実行します。Aspire は Functions ホストの内部ポート 7071 を、リクエスト
+ファイルで使用する固定のローカルエンドポイント `http://localhost:7072` にマッピングします。
+ローカル実行では、関数が `AuthorizationLevel.FUNCTION` を使用していても、Core Tools は
+デフォルトで HTTP 認証を強制しません。デプロイされた関数では function key が必要です。
+別の HTTP クライアントを使用する場合は、次のコマンドで現在の Aspire エンドポイントを取得します。
 
-### Durable CSV batch
+```powershell
+aspire describe --format Json --apphost .\samples\http-check-file\apphost.cs
+```
 
-The batch sample splits a CSV from the `batch-inputs` Blob container into pages in
-`batch-pages`, imports valid rows to PostgreSQL, and records invalid rows separately.
-The PostgreSQL data volume persists across AppHost restarts. Use a new `batchId` for
-each logical run; completed page markers make Activity retries idempotent for that batch.
+### 最小構成の Durable Functions
+
+このサンプルはルートの `apphost.cs` から Aspire 経由で起動します。
+順次パターンと fan-out/fan-in パターンを含み、DTS Emulator の task hub を使用します。
+
+```powershell
+aspire start --non-interactive --apphost .\apphost.cs
+aspire wait durable-functions --non-interactive --apphost .\apphost.cs
+```
+
+公開エンドポイントは `http://localhost:7076` です。
+`samples\durable-functions\requests.http` で Sequential または Fan-out を実行します。
+開始レスポンスに含まれる `statusQueryGetUri` でステータスを確認し、
+`runtimeStatus` が `Completed` になるまで待ちます。
+
+Sequential パターンでは `StepOne`、`StepTwo`、`StepThree` を順番に実行します。
+成功時の出力は現在の実装では `"\"Start\" -> step 1" -> step 2" -> step 3` です。
+Fan-out/fan-in パターンは、本文の項目数（1～20、省略時は5）分の Activity を並列実行し、
+`Processed "Item 1" | Processed "Item 2" | ...` の形式で結果を結合します。
+
+### Durable CSV バッチ
+
+このバッチサンプルは、`batch-inputs` Blob コンテナーの CSV をページに分割し、
+有効な行を PostgreSQL に登録し、無効な行を別途記録します。
+PostgreSQL のデータボリュームは AppHost 再起動後も保持されます。
+論理的な実行ごとに新しい `batchId` を使用してください。完了したページのマーカーにより、
+同じバッチの Activity 再試行は冪等になります。
 
 ```powershell
 .\samples\durable-csv-batch\mvnw.cmd -B -ntp package
@@ -102,30 +85,31 @@ aspire start --non-interactive --apphost .\samples\durable-csv-batch\apphost.cs
 aspire wait durable-csv-batch --non-interactive --apphost .\samples\durable-csv-batch\apphost.cs
 ```
 
-#### Debug with VS Code
+#### VS Code でデバッグする
 
-The batch AppHost starts the Functions host with Java debugging enabled on port
-`5005`. Open this repository in VS Code with the Java Extension Pack installed,
-set a breakpoint in `samples\durable-csv-batch\src\main\java`, and start the
-`Attach to Durable CSV Functions` configuration from **Run and Debug** (F5).
-Then send a request from `samples\durable-csv-batch\requests.http` to hit the
-breakpoint. The debug listener is for local development only.
+バッチ AppHost は、ポート `5005` で Java デバッグを有効にした Functions ホストを起動します。
+Java Extension Pack をインストールした VS Code でこのリポジトリを開き、
+`samples\durable-csv-batch\src\main\java` にブレークポイントを設定します。
+次に、**実行とデバッグ**（F5）から `Attach to Durable CSV Functions` 設定を開始します。
+`samples\durable-csv-batch\requests.http` からリクエストを送信するとブレークポイントに到達します。
+デバッグリスナーはローカル開発専用です。
 
-Create the input container and upload the included CSV to the local Azurite instance.
-Use Azure Storage Explorer connected to the local Azurite emulator to create the
-`batch-inputs` container and upload `sample.csv`. Aspire supplies the Java app with the
-emulator connection string at runtime, so no development account key is duplicated in
-repository code.
+AppHost は起動時に `sample-input.csv` を `batch-inputs/sample-input.csv` として
+ローカル Azurite インスタンスへ自動投入します。Azure Storage Explorer での手動アップロードは不要です。
+Aspire は実行時に Java アプリへ Emulator の接続文字列を渡すため、開発用アカウントキーを
+リポジトリコード内に重複して保存する必要はありません。
 
-Upload the input as above, then open
-`samples\durable-csv-batch\requests.http`. Run **Start the CSV batch**, then run
-**Check the orchestration status** repeatedly until its response reports
-`runtimeStatus` as `Completed`. Change `@batchId` when starting a new logical
-input; reusing an ID intentionally exercises the idempotent replay behavior.
-The request file calls the stable Aspire endpoint on port 7072. Run only one
-workshop AppHost at a time because both Java Functions hosts use internal port 7071.
+入力投入後、`samples\durable-csv-batch\requests.http` を開きます。
+**Start the CSV batch** を実行し、続けて **Check the orchestration status** を
+レスポンスの `runtimeStatus` が `Completed` になるまで繰り返し実行してください。
+新しい論理入力を開始する場合は `@batchId` を変更します。同じ ID を再使用すると、
+意図的に冪等な再実行動作が確認できます。
+このリクエストファイルはポート 7072 の固定 Aspire エンドポイントを呼び出します。
+ルートの統合 AppHost を使用する場合は、`requests.http` の `@baseUrl` を
+`http://localhost:7075` に変更してください。両方の Java Functions ホストが内部ポートを使用するため、
+ワークショップ AppHost は同時に1つだけ実行してください。
 
-The start request body is:
+開始リクエストの本文は次のとおりです。
 
 ```json
 {
@@ -136,25 +120,54 @@ The start request body is:
 }
 ```
 
-The status request reads `statusQueryGetUri` from the preceding start response. The
-included input should finish with four successful rows and one rejected row. PostgreSQL tables
-`imported_records`, `rejected_rows`, and `batch_page_runs` are created on first import.
-Malformed CSV/header or infrastructure errors fail the orchestration; row validation
-errors are recorded and do not stop the other rows.
+ステータスリクエストは、直前の開始レスポンスに含まれる `statusQueryGetUri` を使用します。
+同梓の入力は、4行が正常に登録され、1行が却下される想定です。
+初回インポート時に PostgreSQL テーブル `imported_records`、`rejected_rows`、
+`batch_page_runs` が作成されます。CSV またはヘッダーが不正な場合、または
+インフラストラクチャエラーが発生した場合はオーケストレーションが失敗します。
+行の検証エラーは記録され、他の行の処理は継続します。
 
-Stop only the AppHost you started:
+#### pgAdmin で結果を確認する
+
+Aspire ダッシュボードの `pgadmin` リソースを開くか、次のコマンドで現在の URL を確認します。
+
+```powershell
+aspire describe --format Json --non-interactive --apphost .\apphost.cs
+```
+
+pgAdmin に接続すると、`postgres` 配下のデータベースから `batchdb` / `workshop`
+を開いて確認できます。起動直後に pgAdmin が `Unhealthy` の場合は、数秒待ってから
+再度リソースを開いてください。
+
+初回投入後は、Query Tool で次のSQLを実行できます。
+
+```sql
+SELECT COUNT(*) AS valid_count FROM public.imported_records;
+SELECT COUNT(*) AS rejected_count FROM public.rejected_rows;
+SELECT COUNT(*) AS completed_pages FROM public.batch_page_runs;
+
+SELECT batch_id, COUNT(*) AS row_count
+FROM public.imported_records
+GROUP BY batch_id
+ORDER BY batch_id;
+```
+
+サンプル入力では正常な4件、不正な1件、完了ページが3件になる想定です。
+同じ batch ID を再実行しても、登録件数とページ完了マーカーの件数が増えないことを確認できます。
+
+起動した AppHost だけを停止します。
 
 ```powershell
 aspire stop --non-interactive --apphost .\samples\http-check-file\apphost.cs
-# Or, for the batch sample:
+# バッチサンプルの場合:
 aspire stop --non-interactive --apphost .\samples\durable-csv-batch\apphost.cs
 ```
 
-The SQL row registration and page completion marker are committed in one PostgreSQL
-transaction. The orchestrator limits concurrency in windows and applies a three-attempt,
-five-second retry policy to each page activity.
+SQL による行の登録とページ完了マーカーは、1つの PostgreSQL トランザクションでコミットされます。
+オーケストレーターはウィンドウ内の同時実行数を制限し、各ページ Activity に対して
+3回まで、5秒間隔の再試行ポリシーを適用します。
 
-Stop a CLI-started verification session when finished:
+検証が完了したら、CLI で起動したセッションを停止します。
 
 ```powershell
 aspire stop --non-interactive --apphost .\apphost.cs
