@@ -39,13 +39,13 @@ Skill がツールで読み込めない環境では、このリポジトリ内�
 | `samples\durable-functions\src\main\java\com\example\fanout\FanOutStarter.java` | fan-out/fan-in パターンの HTTP Starter |
 | `samples\durable-functions\src\main\java\com\example\fanout\FanOutOrchestrator.java` | fan-out/fan-in オーケストレーター |
 | `samples\durable-functions\src\main\java\com\example\fanout\FanOutActivity.java` | fan-out/fan-in の Activity |
-| `samples\http-check-file` | Workshop HTTP `CheckFile` function and `apphost.cs` |
-| `samples\durable-csv-batch` | Workshop CSV split/import with Durable, Azurite, PostgreSQL and `apphost.cs` |
+| `samples\http-check-file` | Workshop HTTP `CheckFile` function |
+| `samples\durable-csv-batch` | Workshop CSV split/import with Durable, Azurite, PostgreSQL |
 | `storage` | Azurite。Blob 10000、Queue 10001、Table 10002 |
 | `scheduler` / `default` | DTS Emulator と task hub |
 | `durable-functions` | Maven Wrapper 経由の Java Functions host |
 
-ワークショップサンプルは既存の `durable-functions` と別の AppHost で起動します。
+ワークショップサンプルは既存のルート AppHost から起動します。
 `CheckFile` は単純な HTTP 例、`durable-csv-batch` は Blob の CSV を Durable
 Activity で処理して PostgreSQL に登録する例です。Queue トリガーは使用しません。
 
@@ -53,8 +53,6 @@ Activity で処理して PostgreSQL に登録する例です。Queue トリガ�
 
 - コマンドはリポジトリのルートから実行する。現在の `apphost.cs` はそこを基準に
   `samples\durable-functions` を解決する。別ディレクトリから絶対 `--apphost` だけを渡さない。
-- Workshop AppHost は `.\samples\http-check-file\apphost.cs` と
-  `.\samples\durable-csv-batch\apphost.cs`。起動前に `aspire ps` で既存実行を確認する。
 - 既存の AppHost を使う。`aspire init` / `aspire agent init` を毎回実行しない。
   公式 Aspire Skills は CLI 更新時に上書きされるため編集しない。
   リポジトリ固有の知識は `java-functions-aspire` にのみ置き、
