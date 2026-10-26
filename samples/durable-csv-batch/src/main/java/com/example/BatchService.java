@@ -3,7 +3,6 @@ package com.example;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
-import com.azure.storage.blob.BlobServiceClientBuilder;
 import com.azure.core.util.BinaryData;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -16,7 +15,6 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -95,7 +93,9 @@ public class BatchService {
     public PageResult importPageOnce(PageRef page) {
         try (Connection connection = databaseConnection()) {
             connection.setAutoCommit(false);
-            createSchema(connection);
+            if (!AzureConnections.usesManagedIdentity(System.getenv(), "DB_AUTHENTICATION")) {
+                createSchema(connection);
+            }
             // -1 の完了マーカーは処理中または失敗中を表し、再実行時は同じ結果を再利用します。
             if (!claimPage(connection, page)) {
                 PageResult existing = readPageResult(connection, page);
@@ -214,28 +214,21 @@ public class BatchService {
     }
 
     private static void createSchema(Connection connection) throws SQLException {
-        try (Statement statement = connection.createStatement()) {
-            statement.execute(
-                    "CREATE TABLE IF NOT EXISTS batch_page_runs (" +
-                    "batch_id VARCHAR(64) NOT NULL, " +
-                    "page_id INTEGER NOT NULL, " +
-                    "success_count INTEGER NOT NULL, " +
-                    "failure_count INTEGER NOT NULL, " +
-                    "PRIMARY KEY (batch_id, page_id))");
-            statement.execute(
-                    "CREATE TABLE IF NOT EXISTS imported_records (" +
-                    "batch_id VARCHAR(64) NOT NULL, " +
-                    "record_id INTEGER NOT NULL, " +
-                    "name TEXT NOT NULL, " +
-                    "PRIMARY KEY (batch_id, record_id))");
-            statement.execute(
-                    "CREATE TABLE IF NOT EXISTS rejected_rows (" +
-                    "batch_id VARCHAR(64) NOT NULL, " +
-                    "page_id INTEGER NOT NULL, " +
-                    "line_number INTEGER NOT NULL, " +
-                    "reason TEXT NOT NULL, " +
-                    "raw_row TEXT NOT NULL, " +
-                    "PRIMARY KEY (batch_id, page_id, line_number))");
+        try (java.io.InputStream resource = BatchService.class.getResourceAsStream("/schema.sql");
+             Statement statement = connection.createStatement()) {
+            if (resource == null) {
+                throw new SQLException("The database schema resource is missing.");
+            }
+            // Serialize first-time schema creation across concurrent local Activities.
+            statement.execute("SELECT pg_advisory_xact_lock(742193015)");
+            String schema = new String(resource.readAllBytes(), StandardCharsets.UTF_8);
+            for (String sql : schema.split(";")) {
+                if (!sql.isBlank()) {
+                    statement.execute(sql);
+                }
+            }
+        } catch (IOException e) {
+            throw new SQLException("Unable to load the database schema.", e);
         }
     }
 
@@ -318,24 +311,10 @@ public class BatchService {
     }
 
     private static BlobServiceClient blobService() {
-        String connectionString = requiredEnvironment("AZURE_STORAGE_CONNECTION_STRING");
-        return new BlobServiceClientBuilder()
-                .connectionString(connectionString)
-                .buildClient();
+        return AzureConnections.blobService();
     }
 
     private static Connection databaseConnection() throws SQLException {
-        return DriverManager.getConnection(
-                requiredEnvironment("DB_JDBC_URL"),
-                requiredEnvironment("DB_USERNAME"),
-                requiredEnvironment("DB_PASSWORD"));
-    }
-
-    private static String requiredEnvironment(String name) {
-        String value = System.getenv(name);
-        if (value == null || value.isBlank()) {
-            throw new IllegalStateException("Required environment variable is not set: " + name);
-        }
-        return value;
+        return AzureConnections.databaseConnection();
     }
 }

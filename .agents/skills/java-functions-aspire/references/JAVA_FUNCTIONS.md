@@ -266,3 +266,128 @@ Session 内の一時的なログ購読・検証プロセスも停止する。
 再発防止の知見はこのファイルに集約する。
 ルート `AGENTS.md`、専用 Skill の入口、README のリンクを保つ。
 公式 Aspire Skills は CLI 更新時に上書きされるため、ローカル知識を追記しない。
+
+## Azure 用成果物との分離
+
+Azure デプロイは README の Bicep + azd 手順を使い、ローカル Aspire の配線とは分離します。
+`samples\db-initializer` はクラウド専用の別 Function App で、ローカル AppHost へ
+PostgreSQL 管理者 MI や初期化 HTTP を追加する必要はありません。
+ローカルの CSV サンプルは従来どおり password 接続で共有 `samples\database\schema.sql`
+から自動初期化し、MI モードでは業務コードの DDL を実行しません。
+
+ルート POM は4アプリの parent/reactor です。通常の `package` では元の
+extension bundle とローカル OTel 設定を維持します。`-Pazure` または
+`AZURE_ENV_NAME` が有効なビルドでは staging のみを Azure 用へ変換します。
+ローカル Aspire を実行するシェルに azd 用 `AZURE_ENV_NAME` を残さないでください。
+
+Azure profile は Functions staging → Application Insights agent コピー →
+`Prepare-AzurePackage.ps1` の順に実行します。azd の Java packaging は Maven の
+`package` を使うため、変換を `verify` だけへ移動しないでください。
+binding extensions は通常の .NET SDK と ExtensionsMetadataGenerator で build し、
+出力の `extensions.json` と依存 DLL を Functions staging の `bin` へ配置します。
+Java 用拡張機能に Microsoft.NET.Sdk.Functions を追加しないでください。
+azd up は各アプリを並列 package するため、obj / build / output すべてを
+アプリ固有の `target\azure-host-extensions` に分離します。
+共通の `infra\extensions\bin` を使うと DLL の競合・欠落が発生します。
+各 package の initialize phase では生成済み Functions staging のみを消去し、
+クラウド DLL が次回のローカル package に残存しないようにしています。
+
+サンプルの DTS はダッシュボード利用のため public network access を Enabled、
+`ipAllowlist` を `['0.0.0.0/0']` にします。この設定はデータ API にも適用され、
+Entra 認証と RBAC が必要です。`infra\scheduler.bicep` は azd の
+`AZURE_PRINCIPAL_ID` に scheduler-scoped Durable Task Data Contributor を付与します。
+このロールには状態の閲覧に加え、作成・停止・削除の操作権限もあります。
+Functions の接続先は引き続き private DNS と Private Endpoint を使用し、
+Internet outbound の拒否も維持します。
+ルートの `main.bicep` → `resources.bicep` → `scheduler.bicep` と
+`monitoring.bicep` の配線を維持し、通常は `azd up` で public DTS と public query /
+private ingestion を含む構成全体をデプロイします。
+既存環境の DTS 設定だけを変更する際は、同じ scheduler モジュールの scoped deployment で
+アプリや DB の再デプロイを避けられます。
+ダッシュボードの照会 API は `POST /v1/taskhubs/orchestrations/query`、
+hub 指定は `x-taskhub` ヘッダー、トークンの resource は `https://durabletask.io` です。
+実環境では public 接続元から両 hub の認証付き照会が200となり、保存済み実行を取得できました。
+匿名の同じ照会は404でした。画面の HTML を取得できたことだけを閲覧成功とせず、
+API の応答と `orchestrations` の内容を確認します。トークンや実行の本文は出力しません。
+ブラウザー用リンクには task hub の ARM GET が返す `properties.dashboardUrl` を使用します。
+現在の画面は subscription / scheduler / taskhubs のパスと `endpoint` / `tenantId` を解釈します。
+`/?endpoint=...&taskhub=...` は task hub を設定せず、`authType: none` の接続を保存しました。
+この接続を経由すると匿名の404が `Task hub not found` と表示されます。
+正式な URL を開き直しても既存の `none` が残るため、Home の対象カードで
+Delete endpoint → Remove Entire Endpoint を実行し、正式なリンクを再度開きます。
+これはブラウザーの接続登録だけの削除です。Azure リソースや RBAC の変更は不要でした。
+作り直した接続が `default-azure` となり、両 hub の一覧が実際に表示されることを確認しました。
+
+明示インストールは公式に説明された代替手段ですが、bundle が推奨です。
+パッケージ生成の成功と、Java + DTS + Flex が Internet 拒否で起動することは別です。
+Azure 上のコールドスタート／閉域 DB／DTS 完了／監視／外向き拒否は、
+対象 subscription と region を決めた実環境で改めて確認します。
+
+Internet 拒否時は Functions host 自身へのトリガー同期も考慮します。
+実デプロイでは `/operations/settriggers` 宛ての HTTPS が 100 秒で timeout しました。
+host の `FunctionsSyncManager.BuildSetTriggersRequest` は自身の公開ホスト名を使います。
+各 app の Private Endpoint と `privatelink.azurewebsites.net` を VNet にリンクし、
+同じホスト名を VNet 内だけ private IP に解決します。public HTTP / SCM は明示的に
+有効のままにし、Internet 許可で回避しないでください。
+Azure CLI の `functionapp show` はバージョンにより ARM 形式の `properties` を返すため、
+hostname の query は `properties.defaultHostName || defaultHostName` を使います。
+
+Azure staging からローカル専用の OTel agent と
+`azure-functions-java-opentelemetry` invocation middleware を除去します。
+1.1.0 の middleware は下流の例外後に同じ chain を再実行するため、Durable の
+yield 例外が吸収される順序では「最初の Activity を schedule しただけで Completed /
+output=null」になります。Application Insights agent を外すだけでは直りませんでした。
+クラウド成果物からローカル用 middleware を外した実デプロイでは3段の Activity が完了しました。
+ローカルの依存関係やソースの host.json は変更しません。
+
+クラウドは Java 11 です。新しい JDK の `source` / `target` だけでは API の互換性を
+保証できず、実デプロイでは `Random.nextLong(long)` が `NoSuchMethodError` になりました。
+`release=11` を使い、待機時間は Java 11 に存在する `nextInt(3000)` で生成します。
+String Activity の入力には現在の binding で JSON の引用符が含まれます。
+順次処理の期待値は前段の文字列を JSON 化してから各 step を追加して比較し、
+引用符の修正をインフラ変更に混ぜないでください。
+
+PostgreSQL の Entra 管理関数は `postgres` DB にのみ存在します。初期化では
+`DB_ADMIN_JDBC_URL` で principal 作成をコミットした後、`DB_JDBC_URL` の
+`workshop` DB で schema / grant をコミットします。各段階をロックし再実行可能にします。
+`pgaadauth_list_principals` の role 名は先頭列への alias で参照します。
+Functions key の作成 API が値を返さない場合は、対象キーを別途 list してメモリ内で取得します。
+値や statusQueryGetUri は出力せず、終了時にその名前のキーを削除します。
+再起動後の初期化 HTTP で一度 transport failure が発生し、再実行は成功しました。
+hook は既存の最大10試行内で一時的な接続・timeout を再試行し、403 や未知の例外は
+直ちに失敗させます。HTTP timeout 後もサーバー側が続行し得るため、
+初期化の冪等性と各 DB の advisory lock を維持します。
+
+Azure の実確認は `scripts\Test-AzureDeployment.ps1` を使います。
+seed する既存の sample-input.csv は500行（正常490 / 不正10）であり、
+pageSize=200 / maxParallel=2 で3ページを2回、同じ batch ID で実行します。
+成功時の HTTP history は `TaskCompleted` / `FunctionName` の形に正規化され、
+`TaskScheduled` / `Name` を数えてもページ数の検証にはなりません。
+4アプリの再起動後にも順次処理、12件の fan-out、CSV の期待出力と再実行、
+private self-DNS と外部 TCP timeout を確認しました。
+Application Insights の取り込みは private / local auth 無効のまま request メトリックの
+取り込みを ARM から確認できます。Logs 本文の private query や負荷 scale-out の
+検証を代替するものではありません。
+
+サンプルの監視 query は Log Analytics / Application Insights の両方で public を許可します。
+`publicNetworkAccessForQuery: Enabled` だけを設定し、取り込み側は Disabled、
+ローカル認証無効と Entra / RBAC、AMPLS 両 access mode の PrivateOnly を維持します。
+これは閉域取り込みに対する明示的な query-only の例外です。
+手元の PC からのクエリのために AMPLS query mode を Open にしたり、
+Functions の Internet outbound を許可したりしないでください。
+手元の PC から workspace の ARM query と Application Insights query API の両方が
+Entra 認証で成功し、匿名アクセスは401でした。Queue の検証文字列に一致する trace
+3件も集計で確認済みです。ログ本文や Bearer token は出力・保存しません。
+workspace ARM query の古い API は `Tables` / `Columns.ColumnName` / `Rows` を返すため、
+Application Insights query API の `tables` / `columns.name` と形式を混同しないでください。
+
+全関数の実行確認では、4アプリに登録された16関数を先に列挙します。
+HTTP / Durable の正常完了と初期化 hook で15関数を通し、`LogQueueMessage` は
+公式の `POST /admin/functions/LogQueueMessage` と `{"input":"検証文字列"}` で
+手動実行できます。既存 master key はメモリ内から HTTPS ヘッダーで送るだけにし、
+ログやファイルへ残しません。HTTP 202 だけでは完了とせず、他の関数を呼ばない
+UTC の分境界以降の時間帯で app の `OnDemandFunctionExecutionCount` と
+Application Insights の app 別成功 request を照合します。
+実測では3回の手動起動に対して execution=3、成功=3、失敗=0 でした。
+ARM メトリックの照会区間は少なくとも1分を確保し、取り込み遅延を待ちます。
+これは実 Queue 投入のテストではないため、手動実行と Queue サービス経由を混同しません。

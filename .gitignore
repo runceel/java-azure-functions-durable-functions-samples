@@ -1,2 +1,5 @@
 **/target/
 **/local.settings.json
+.azure/
+**/bin/
+infra/main.json
