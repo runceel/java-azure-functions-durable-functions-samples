@@ -35,10 +35,9 @@ public class FanOutStarter {
         if (count == null) {
             count = 5;
         }
-        // 想定外の件数による過剰な並列実行を避けるため、範囲を限定します。
-        if (count < 1 || count > 20) {
+        if (count < 1 || count > 100) {
             return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
-                    .body("The item count must be between 1 and 20.")
+                    .body("The item count must be between 1 and 100.")
                     .build();
         }
         String instanceId = durableContext.getClient()

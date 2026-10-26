@@ -183,6 +183,29 @@ Activity の String 入力に引用符が含まれる現行 SDK／binding の挙
 引用符なしの出力だったと報告しない。直す場合は I/O 契約の調査と別の検証を伴う変更として扱う。
 管理 URL にはキーが含まれ得る。レスポンス全体や接続情報を永続ファイルに保存しない。
 
+### Fan-out/fan-in の中断・再開デモ
+
+`POST /api/orchestrations/fan-out` の本文は整数1～100（省略時5）。
+最大10件を fan-out し、`allOf(...).await()` で fan-in してから次のバッチを開始する。
+`customStatus` の `total`、`completed`、`batchSize` でバッチ単位の進捗を確認する。
+Activity の3～6秒弱の待機は Activity 内だけで行い、Orchestrator に `Thread.sleep` を追加しない。
+
+本文 `100` で開始し、完了件数が0より大きく100未満の間に Aspire の
+`durable-functions` resource だけを `stop` → `start` する。
+操作前に resource の公開 command を確認する。停止後に `start` が公開される。
+scheduler、storage、AppHost 全体は停止しない。元の `statusQueryGetUri` を再利用し、
+同じインスタンスが `Completed`、`customStatus.completed=100`、
+Item 1～100 の入力順の結果になることを確認する。
+完了済み Activity は履歴から結果を再利用するが、停止時に実行中の Activity は再実行され得る。
+Emulator 自体の再起動時の永続性や exactly-once の検証とは区別する。
+Orchestrator のバッチ構造を変更する前に開始したインスタンスを検証に使わない。
+
+2026-10-23 のローカル検証では、100件の実行を `completed=10` で停止し、
+resource が `Finished` となってから再起動した。同一インスタンスが
+`Completed`、`completed=100` となり、Item 1～100 の結果が欠落・重複なく
+入力順に返ることを確認した。1件・10件・11件・本文省略（5件）の完了と、
+-1・0・101件の HTTP 400 も確認した。
+
 ## 5. Workshop の通常 / Durable Java Functions
 
 `samples\http-check-file` は `CheckFile` の HTTP 入力検証例です。HTTP だけなので Durable SDK、

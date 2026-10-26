@@ -37,7 +37,7 @@ Skill がツールで読み込めない環境では、このリポジトリ内�
 | `samples\durable-functions\src\main\java\com\example\hello\HelloOrchestrator.java` | 3 Activity の順次実行オーケストレーター |
 | `samples\durable-functions\src\main\java\com\example\hello\HelloActivities.java` | Hello 順次パターンの Activity |
 | `samples\durable-functions\src\main\java\com\example\fanout\FanOutStarter.java` | fan-out/fan-in パターンの HTTP Starter |
-| `samples\durable-functions\src\main\java\com\example\fanout\FanOutOrchestrator.java` | fan-out/fan-in オーケストレーター |
+| `samples\durable-functions\src\main\java\com\example\fanout\FanOutOrchestrator.java` | 最大100件を10件ずつ fan-out/fan-in。customStatus に完了件数を公開 |
 | `samples\durable-functions\src\main\java\com\example\fanout\FanOutActivity.java` | fan-out/fan-in の Activity |
 | `samples\http-check-file` | Workshop HTTP `CheckFile` function |
 | `samples\durable-csv-batch` | Workshop CSV split/import with Durable, Azurite, PostgreSQL |

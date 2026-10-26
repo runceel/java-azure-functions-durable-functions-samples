@@ -211,7 +211,7 @@ var durableFunctionsDirectory = System.IO.Path.GetFullPath(".\\samples\\durable-
 var durableAgentPath = System.IO.Path.GetFullPath(
     ".\\samples\\durable-functions\\target\\azure-functions\\durable-functions-minimal\\opentelemetry-javaagent.jar");
 builder.AddJavaApp("durable-functions", durableFunctionsDirectory)
-    .WithMavenGoal("package", "azure-functions:run")
+    .WithMavenGoal("clean", "package", "azure-functions:run")
     .WithWrapperPath(System.IO.Path.Combine(
         durableFunctionsDirectory,
         OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"))
