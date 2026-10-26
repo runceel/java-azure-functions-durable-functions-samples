@@ -19,7 +19,7 @@ public class FanOutActivity {
     @FunctionName("FanOutActivity")
     public String fanOutActivity(
             @DurableActivityTrigger(name = "input") String input) throws InterruptedException {
-        Thread.sleep(3000 + new Random().nextLong(3000));
+        Thread.sleep(3000 + new Random().nextInt(3000));
         return "Processed " + input;
     }
 }

@@ -47,7 +47,23 @@ Skill がツールで読み込めない環境では、このリポジトリ内�
 
 ワークショップサンプルは既存のルート AppHost から起動します。
 `CheckFile` は単純な HTTP 例、`durable-csv-batch` は Blob の CSV を Durable
-Activity で処理して PostgreSQL に登録する例です。Queue トリガーは使用しません。
+Activity で処理して PostgreSQL に登録する例です。`http-check-file` には
+`LogQueueMessage` Queue トリガーもあります。
+
+## Azure デプロイ
+
+- Azure は手書き Bicep (`infra\main.bicep`) と `azure.yaml` / `azd up` を使う。
+  Aspire の preview デプロイに置き換えない。構成・制約は README の Azure セクションを参照。
+- 既存3アプリと DB 初期化アプリを別々の MI に分離する。PostgreSQL 管理者 MI を
+  業務アプリに追加しない。クラウドの業務コードから DDL を実行しない。
+- 初期化 HTTP の Function key はサンプルとしての明示的な例外。hook が一時作成・削除し、
+  ソース、ログ、azd output に保存しない。サービス間接続は MI を維持する。
+- Azure 用拡張機能と監視 agent は Maven の `azure` profile で成果物へ同梱する。
+  `AZURE_ENV_NAME` により自動有効になるため、通常のローカル Aspire 実行に混入させない。
+  staging 内の変更をソースの `host.json` に戻さない。
+- `azd package` / Bicep build の成功だけで閉域実行を保証しない。
+  subscription / region の明示選択と承認前に provision/deploy しない。
+  通信や初期化失敗を public access / Shared Key の有効化で回避しない。
 
 ## 必ず守ること
 
@@ -77,8 +93,8 @@ Activity で処理して PostgreSQL に登録する例です。Queue トリガ�
 ## 完了判定と引き継ぎ
 
 Durable は Starter の受付だけで成功にしない。返された `statusQueryGetUri` を使い、
-`runtimeStatus = Completed` と現行サンプルの出力 `Hello, "Durable Functions"!` を確認する。
-引用符を含む出力は現在の実測値です。意図した挨拶へ直す場合は別の挙動変更として扱います。
+`runtimeStatus = Completed` と README に記載した現行パターンの期待出力を確認する。
+引用符を含む出力の変更は、デプロイ変更と混ぜず別の挙動変更として扱います。
 
 変更した配線やバージョン、確認できた結果／未確認事項、停止済みかを簡潔に報告する。
 再利用できる新しい知見は `JAVA_FUNCTIONS.md` に反映し、セッション履歴だけに残さない。

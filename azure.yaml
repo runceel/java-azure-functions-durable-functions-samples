@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: java-functions-private
+infra:
+  provider: bicep
+  path: infra
+services:
+  http-check-file:
+    project: samples/http-check-file
+    language: java
+    host: function
+    remoteBuild: false
+  durable-functions:
+    project: samples/durable-functions
+    language: java
+    host: function
+    remoteBuild: false
+  durable-csv-batch:
+    project: samples/durable-csv-batch
+    language: java
+    host: function
+    remoteBuild: false
+  db-initializer:
+    project: samples/db-initializer
+    language: java
+    host: function
+    remoteBuild: false
+hooks:
+  postdeploy:
+    shell: pwsh
+    run: ./scripts/Initialize-Database.ps1
+    interactive: false
+    continueOnError: false

@@ -47,7 +47,7 @@ Linux コンテナを使える Docker が必要。Maven は各アプリの Wrapp
 4. 前提条件を確認してから依頼された変更／実行を行う。
    既存 AppHost を再初期化せず、未知の API は `aspire docs` で調べる。
 5. `aspire wait` 後もログを確認する。`Healthy` だけで成功扱いしない。
-   Durable では現行サンプルの `Completed` と `Hello, "Durable Functions"!`、
+   Durable では `Completed` と README の該当パターンの期待出力、
    通常 Functions では依頼された入出力契約まで検証する。
 6. 検証用に自分で起動した AppHost とログ購読は終了時に停止する。
    既存の稼働やユーザーが継続利用する環境を無断停止しない。
