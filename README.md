@@ -1,15 +1,47 @@
 # java-azure-functions-durable-functions-samples
 
-### 前提条件
+Java Azure Functions と Durable Functions のサンプル集です。
+ローカルでは Aspire から Java の Functions host、Azurite、Durable Task Scheduler
+（DTS）Emulator、PostgreSQL をまとめて起動します。
+Aspire の AppHost は C#、Functions 本体は Java です。
+**まずローカルで試す場合、Azure へのサインインやクラウドリソースは不要です。**
+
+## サンプル一覧
+
+| サンプル | 学べること | ローカル URL | リクエスト例 |
+|---|---|---|---|
+| [http-check-file](samples/http-check-file) | HTTP 入力検証と Queue trigger | `http://localhost:7072` | [requests.http](samples/http-check-file/requests.http) |
+| [durable-functions](samples/durable-functions) | Activity の順次実行、fan-out/fan-in、中断・再開 | `http://localhost:7076` | [requests.http](samples/durable-functions/requests.http) |
+| [durable-csv-batch](samples/durable-csv-batch) | Blob の CSV を分割・並列処理し、PostgreSQL に冪等に登録 | `http://localhost:7075` | [requests.http](samples/durable-csv-batch/requests.http) |
+
+初めての場合は、HTTP の `CheckFile` → 最小構成の Durable Functions → CSV バッチの順に
+試すと、単純なリクエスト処理から状態を持つバッチ処理へ進めます。
+各サンプルは共通のルート AppHost から起動します。
+
+## 目次
+
+- [サンプルの動かし方（ローカル）](#サンプルの動かし方ローカル)
+- [Azure へのデプロイ（Bicep + azd）](#azure-へのデプロイbicep--azd)
+
+## サンプルの動かし方（ローカル）
+
+以下のコマンドは Windows / PowerShell 向けです。
+**すべてリポジトリルートから実行してください。**
+
+### 1. 前提条件を準備する
 
 - .NET 10 SDK と Aspire CLI
 - インストール済み JDK を指す `JAVA_HOME` を設定した JDK 11 以降
 - Azure Functions Core Tools v4（`func` を PATH に設定）
 - Linux コンテナーエンジンを使用する Docker Desktop
 
-### 実行
+Maven は各サンプルに含まれる Maven Wrapper を使用するため、別途インストールは不要です。
+Docker Desktop を起動してから次に進みます。初回起動には依存パッケージと
+コンテナーイメージのダウンロードが必要です。
 
-リポジトリルートから次を実行します。
+### 2. Aspire で起動する
+
+3つのサンプルと依存サービスをまとめて起動します。
 
 ```powershell
 aspire start --non-interactive --apphost .\apphost.cs
@@ -24,29 +56,39 @@ aspire wait durable-csv-batch --non-interactive --apphost .\apphost.cs
 aspire run --apphost .\apphost.cs
 ```
 
-## サンプルの動かし方（ローカル）
+起動時に案内される Aspire Dashboard でリソースの状態とログを確認できます。
+**`aspire wait` の成功だけでは Functions host の起動完了を保証しません。**
+初回は Maven のビルドが続くため、各 Functions のログで関数の一覧と
+host の起動完了を確認してからリクエストを送ってください。
 
-コマンドはリポジトリルートから実行してください。ローカル Emulator を使用するため、
-Azure へのサインインやクラウドリソースは不要です。
+`.http` ファイルは VS Code の REST Client 拡張機能など、対応する HTTP クライアントで
+実行します。ローカルでは Functions Core Tools が通常 Function key の認証を強制しないため、
+これらのリクエストはキーなしで呼び出せます。Azure 上では Function key が必要です。
 
-`samples\http-check-file` は HTTP 入力検証と Queue trigger の例です。
-`samples\durable-csv-batch` は Azurite の CSV を Durable Activity で処理し、
-PostgreSQL に登録する例です。両方ともルートの AppHost から起動します。
+### 3. HTTP と Queue trigger を試す
 
-### 最小構成の Durable Functions
+[`http-check-file/requests.http`](samples/http-check-file/requests.http) のリクエストを実行します。
 
-このサンプルはルートの `apphost.cs` から Aspire 経由で起動します。
-順次パターンと fan-out/fan-in パターンを含み、DTS Emulator の task hub を使用します。
+- `Check a file name`: `sample.csv` を送信すると HTTP 200 と
+  `Accepted file name: sample.csv` を返します。
+- `Reject an empty file name`: 空の本文を送信すると HTTP 400 と
+  `blobName is required` を返します。
 
-```powershell
-aspire start --non-interactive --apphost .\apphost.cs
-aspire wait durable-functions --non-interactive --apphost .\apphost.cs
-```
+`CheckFile` はファイル名を受け付けるだけで、Blob の存在確認や CSV 処理は行いません。
+Queue trigger は別の関数です。Aspire Dashboard の `queues` リソースで
+**Send queue message** コマンドからメッセージを送信し、`http-check-file` のログに
+`Queue message received: ...` が出ることを確認します。
+
+### 4. 最小構成の Durable Functions を試す
+
+順次パターンと fan-out/fan-in パターンを含み、DTS Emulator の `default` task hub を使用します。
 
 公開エンドポイントは `http://localhost:7076` です。
-`samples\durable-functions\requests.http` で Sequential または Fan-out を実行します。
+[`durable-functions/requests.http`](samples/durable-functions/requests.http) で
+Sequential または Fan-out を実行します。
 開始レスポンスに含まれる `statusQueryGetUri` でステータスを確認し、
 `runtimeStatus` が `Completed` になるまで待ちます。
+`.http` ファイル内の対応するステータス照会リクエストを繰り返し実行できます。
 
 Sequential パターンでは `StepOne`、`StepTwo`、`StepThree` を順番に実行します。
 成功時の出力は現在の実装では `"\"Start\" -> step 1" -> step 2" -> step 3` です。
@@ -83,7 +125,26 @@ aspire wait durable-functions --non-interactive --apphost .\apphost.cs
 再起動時には Orchestrator が履歴をリプレイし、完了済み Activity の結果を再利用します。
 停止時に実行中だった Activity は再実行される場合があります（exactly-once の保証ではありません）。
 
-検証が完了したら、CLI で起動したセッションを停止します。
+### 5. CSV バッチを試す
+
+Azurite の CSV をページ分割し、DTS Emulator の `workshop` task hub で
+ページごとの Activity を並列実行して、PostgreSQL に登録します。
+AppHost の起動時に、[`sample-input.csv`](samples/durable-csv-batch/sample-input.csv) が
+Azurite の `batch-inputs` コンテナーにアップロードされます。手動アップロードは不要です。
+
+1. [`durable-csv-batch/requests.http`](samples/durable-csv-batch/requests.http) の
+   `Start the CSV batch` を実行します。既定のリクエストは `batchId: workshop-001`、
+   `pageSize: 50`、`maxParallel: 2` です。
+2. `Check the orchestration status` を繰り返し実行し、`runtimeStatus: Completed` と
+   `output` の `successCount`（正常行数）、`failureCount`（入力検証で不正となった行数）を確認します。
+   不正行が含まれていても、バッチ自体は正常行を登録して完了します。
+3. 同じ `batchId` のまま開始リクエストを再実行すると、新しいオーケストレーションが
+   開始されますが、処理済みページの結果を再利用し、DB への重複登録を防ぎます。
+   入力 CSV やページ分割の条件を変えて試す場合は、別の `batchId` を指定してください。
+
+### 6. 停止する
+
+一通り試したら、CLI で起動した AppHost を停止します。
 
 ```powershell
 aspire stop --non-interactive --apphost .\apphost.cs
@@ -91,11 +152,24 @@ aspire stop --non-interactive --apphost .\apphost.cs
 
 ## Azure へのデプロイ（Bicep + azd）
 
+**ここからは Azure サブスクリプションと課金対象のリソースが必要です。**
+ローカルで試すだけなら、このセクションの作業は不要です。
+デプロイする場合は、以下の構成と制限を確認してから
+[前提条件とコマンド](#前提条件とコマンド)へ進んでください。
+
+- [Azure の構成とネットワーク](#azure-の構成とネットワーク)
+- [Durable Task Scheduler ダッシュボード](#durable-task-scheduler-ダッシュボード)
+- [認証と DB 初期化](#認証と-db-初期化)
+- [前提条件とコマンド](#前提条件とコマンド)
+- [Azure 実行用成果物の作成](#azure-実行用成果物の作成)
+- [Azure 上で確認する項目と制限](#azure-上で確認する項目と制限)
+
 ローカルでは Aspire で各サービスを起動します。
 Azure へのデプロイには `azure.yaml` と `infra\main.bicep` を使用します。
 DTS の public 接続と Azure Monitor 系の public query 設定もこの Bicep に含み、
 `azd up` でアプリとまとめてデプロイします。
-実環境での確認結果と未検証事項は、後半の「Azure 上で確認する項目と制限」を参照してください。
+
+### Azure の構成とネットワーク
 
 | 対象 | Azure 用の設定 |
 |---|---|
@@ -106,6 +180,12 @@ DTS の public 接続と Azure Monitor 系の public query 設定もこの Bicep
 | PostgreSQL | Private Endpoint、public network 無効、Entra 認証のみ |
 | Application Insights / Logs | AMPLS 経由の private ingestion。クエリのみ public を許可、Entra 認証・RBAC 必須、ローカル認証無効 |
 | Functions outbound | VNet integration。Private Endpoint subnet の TCP 443/5432 とプラットフォーム DNS だけを許可し、残りの新規 outbound を NSG で拒否 |
+
+**HTTP の入口は public、Functions から依存サービスへの接続は private です。**
+Storage / PostgreSQL を手元の PC から直接操作するには、VNet への接続経路と private DNS が必要です。
+
+<details>
+<summary>ネットワークの詳細：outbound 制限・DNS・Functions 自身への接続</summary>
 
 Flex Consumption は、VNet integration を設定するとアプリケーションの outbound 通信を
 VNet にルーティングします。NSG では、Private Endpoint subnet の TCP 443/5432 を
@@ -121,41 +201,62 @@ private DNS を用意します。Functions host のトリガー同期は自身�
 public network access は明示的に有効のままなので、外部の HTTP / SCM アクセスは維持します。
 自分自身への呼び出しも Private Endpoint を通るため、outbound の許可範囲を維持できます。
 
+`AzurePlatformDNS` service tag は Deny 専用なので Allow ルールを作らず、
+Azure 提供 DNS の標準の非フィルタ動作を維持しています。
+
+</details>
+
 ### Durable Task Scheduler ダッシュボード
 
-Azure Portal で scheduler の task hub（`default` または `workshop`）を開き、
-ダッシュボードのリンクからオーケストレーションの状態や履歴を確認できます。
-このリンクは task hub の ARM プロパティ `dashboardUrl` として取得できます。
+1. Azure Portal で scheduler の task hub（`default` または `workshop`）を開きます。
+2. ダッシュボードのリンクを開き、Entra 認証でサインインします。
+3. オーケストレーションの一覧・状態・履歴を確認します。
+
+| 項目 | 設定・注意点 |
+|---|---|
+| 接続 | 手元の PC から使えるよう、ダッシュボードとデータ API の public 接続を許可。どちらも Entra 認証・RBAC 必須 |
+| 利用者の権限 | scheduler に限定した `Durable Task Data Contributor`。閲覧だけでなく、作成・停止・削除も可能 |
+| 利用者の指定 | azd が `AZURE_PRINCIPAL_ID` の Object ID を Bicep に渡す |
+| Functions からの接続 | private DNS と Private Endpoint を使用。Internet 向け outbound 拒否は維持 |
+
+<details>
+<summary>接続 URL の詳細と「Task hub not found」の対処</summary>
+
+Portal のリンクは task hub の ARM プロパティ `dashboardUrl` でも取得できます。
 URL には subscription / scheduler / task hub のパスと `endpoint` / `tenantId` が含まれ、
 対象の task hub と Entra 認証先が設定されます。
-サンプルを手元の PC から操作できるように、DTS の public 接続を有効にしています。
-この設定はダッシュボードとデータ API に共通で、どちらも Entra 認証と RBAC が必要です。
-デプロイ利用者には scheduler に限定した `Durable Task Data Contributor` を付与します。
-このロールには閲覧に加え、オーケストレーションの作成・停止・削除などの操作権限も含まれます。
-azd は利用者の Object ID を `AZURE_PRINCIPAL_ID` から Bicep に渡します。
 
-`Task hub not found` と表示される場合は、ダッシュボードに保存された接続設定も確認してください。
-`/?endpoint=...&taskhub=...` の形式では、現在の画面に認証なしの接続が保存されます。
-その設定は正式な URL を開き直しても残るため、Home で対象の接続カードの
-`Delete endpoint` → `Remove Entire Endpoint` を選択してから、Portal のリンクを開き直します。
-削除するのはブラウザーの保存済み接続だけで、Azure の scheduler や task hub は保持されます。
+`/?endpoint=...&taskhub=...` の形式で開くと、認証なしの接続がブラウザーに保存されます。
+正式な URL を開き直しても設定が残り、`Task hub not found` になる場合があります。
 
-Functions は VNet 内の private DNS で DTS のホスト名を private IP に解決し、
-引き続き Private Endpoint を通じて接続します。Internet 向け outbound の拒否も維持します。
+1. ダッシュボードの Home で対象の接続カードを開きます。
+2. `Delete endpoint` → `Remove Entire Endpoint` を選びます。
+3. Portal の正式なリンクを開き直します。
+
+削除するのはブラウザーの保存済み接続だけです。Azure の scheduler や task hub は保持されます。
+
+</details>
 
 ### 認証と DB 初期化
 
-各 Function App に別々の User Assigned Managed Identity を割り当てます。
-host/deployment Blob、Queue、業務 Blob、DTS、PostgreSQL、テレメトリの認証は MI です。
-DB 初期化用 MI だけを PostgreSQL Entra administrator とします。
-DB 初期化用アプリがスキーマを作成し、業務用 MI に必要な権限を付与します。業務用 MI には
-`batch_runtime` ロール経由で CONNECT / schema USAGE / 対象3テーブルの
-SELECT・INSERT・UPDATE のみを付与し、業務用アプリは初期化済みのテーブルを使用します。
-JDBC は `verify-full` と `DefaultJavaSSLFactory` を組み合わせ、JDK の trust store で
-証明書チェーンとホスト名を検証します。
+**DB 初期化は専用アプリだけが行い、業務アプリには DDL 権限を与えません。**
 
-`azd` の `postdeploy` hook が、別アプリの
-`POST /api/database/initialize` を呼び出します。入力パラメーターや任意 SQL は受け付けません。
+| 対象 | 認証・権限 |
+|---|---|
+| 各 Function App | それぞれ別の User Assigned Managed Identity（MI） |
+| サービス間接続 | host/deployment Blob、Queue、業務 Blob、DTS、PostgreSQL、テレメトリは MI 認証 |
+| DB 初期化用 MI | この MI だけを PostgreSQL Entra administrator に設定。スキーマ作成と業務用 MI への権限付与を担当 |
+| 業務用 MI | `batch_runtime` 経由で CONNECT / schema USAGE / 対象3テーブルの SELECT・INSERT・UPDATE のみ |
+| JDBC | `verify-full` + `DefaultJavaSSLFactory`。JDK の trust store で証明書チェーンとホスト名を検証 |
+| 初期化 HTTP | `postdeploy` hook が一時 Function key で `POST /api/database/initialize` を呼ぶ。入力パラメーター・任意 SQL は不可 |
+
+> 初期化 HTTP の Function key は、このサンプルでの明示的な例外です。
+> Entra 認証の代替となる本番向けの利用者認証ではありません。
+> hook を強制終了した場合は、`azd-bootstrap-` で始まる残存キーを手動で削除してください。
+
+<details>
+<summary>初期化の詳細：再実行・トランザクション・一時キーの扱い</summary>
+
 同じ初期化は再実行でき、既存ロールの Object ID 不一致では停止します。
 Entra ロールの作成・検証は、管理関数が存在する `postgres` DB で先にコミットします。
 その後の `workshop` DB の DDL と権限設定も別のトランザクション／advisory lock で保護し、
@@ -164,25 +265,23 @@ Entra ロールの作成・検証は、管理関数が存在する `postgres` DB
 存在しない場合にサンプル CSV を作成します。
 DB コミット後に Blob 準備が失敗した場合も、hook を再実行できます。
 
-このサンプルの例外として、初期化 HTTP の呼び出しには Function key を使用します。
 hook はデプロイ主体の Azure 管理権限で一時的な function-scoped key を作成し、
 メモリ内からヘッダーで送信した後、`finally` で削除します。キーをソース、azd output、
 URL、ログへ保存しません。作成・削除に失敗した場合は hook も失敗します。
 作成 API がキーの値を返さない場合にも対応するため、作成後に対象キーを別途読み取ります。
 SQL 失敗時はキー認証済み応答に SQLSTATE だけを返し、SQL 本文や資格情報は返しません。
-プロセスを強制終了した場合は `azd-bootstrap-` で始まる残存キーを手動で削除してください。
-Function key は Entra 認証の代替となる本番向けの利用者認証ではありません。
+
+</details>
 
 ### 前提条件とコマンド
 
-ローカル用の前提条件に加え、Azure CLI、Azure Developer CLI、PowerShell 7、
-.NET 8 をターゲットにした拡張機能を build できる .NET SDK が必要です。
-ビルド端末は Maven Central / NuGet に到達できる必要があります。
-デプロイ主体には RG 作成、リソース作成、RBAC 付与、Functions key 管理の権限が必要です。
-必要な resource providers は `Microsoft.Web`、`Microsoft.App`、`Microsoft.Storage`、
-`Microsoft.Network`、`Microsoft.DurableTask`、`Microsoft.DBforPostgreSQL`、
-`Microsoft.Insights`、`Microsoft.OperationalInsights`、`Microsoft.ManagedIdentity` です。
-Java Flex、DTS Private Link、PostgreSQL が利用可能なリージョンと quota を確認してください。
+| 確認項目 | 必要なもの |
+|---|---|
+| ツール | ローカル用の前提条件 + Azure CLI、Azure Developer CLI、PowerShell 7、.NET 8 向け拡張機能を build できる .NET SDK |
+| ビルド端末の通信 | Maven Central / NuGet への到達性 |
+| デプロイ主体の権限 | RG 作成、リソース作成、RBAC 付与、Functions key 管理 |
+| リージョン・quota | Java Flex、DTS Private Link、PostgreSQL が利用可能であること |
+| Resource providers | `Microsoft.Web`、`Microsoft.App`、`Microsoft.Storage`、`Microsoft.Network`、`Microsoft.DurableTask`、`Microsoft.DBforPostgreSQL`、`Microsoft.Insights`、`Microsoft.OperationalInsights`、`Microsoft.ManagedIdentity` |
 
 リポジトリルートで実行します。subscription と location は利用する環境を明示的に選択します。
 
@@ -196,31 +295,40 @@ azd provision --preview
 azd up
 ```
 
-初回は `azd up` を使用します。4アプリを package/deploy した後に、
-`postdeploy` hook が DB を初期化します。初回起動と MI/RBAC 反映を
-待つ bounded retry を含み、一時的な接続失敗・timeout も最大10回の HTTP 試行内で再試行します。
-再試行中も、依存サービスの閉域設定と Shared Key 無効の設定を維持します。
-初期化のみの再実行は、対象環境を選択した上で
-`azd hooks run postdeploy` を使用します。
+| 操作 | 動作 |
+|---|---|
+| `azd provision --preview` | デプロイ前にインフラの変更予定を確認 |
+| `azd up` | 初回はこちらを使用。インフラを作成し、4アプリを package/deploy 後、`postdeploy` hook で DB を初期化 |
+| `azd hooks run postdeploy` | 対象環境を選択した上で、初期化だけを再実行 |
+
+hook は初回起動・MI/RBAC 反映待ちや一時的な接続失敗・timeout を、最大10回の HTTP 試行内で
+再試行します。**失敗を回避するために public access や Shared Key を有効にしないでください。**
 
 ### Azure 実行用成果物の作成
 
-Maven の `azure` profile は、azd が渡す `AZURE_ENV_NAME` がある場合に有効になります。
-次のコマンドで、Azure 用の package とデプロイテンプレートをビルド端末上に生成します。
+`azd up` の package は Maven の `azure` profile を使用します。
+azd が渡す `AZURE_ENV_NAME` により自動で有効になります。
+デプロイせずに成果物だけをビルドする場合は、次を実行します。
 
 ```powershell
 .\samples\durable-csv-batch\mvnw.cmd -f .\pom.xml -Pazure package
 az bicep build --file .\infra\main.bicep --outfile .\infra\main.json
 ```
 
-通常の Java unit tests は `.\samples\durable-csv-batch\mvnw.cmd -f .\pom.xml test`、
-初期化 hook の retry／失敗／キー削除テストは
-`pwsh -NoProfile -File .\scripts\tests\Initialize-Database.Tests.ps1` で実行できます。
-hook テストは、mock の Azure CLI と HTTP 応答を使ってビルド端末上で実行します。
+| 設定 | ローカル | Azure 用成果物 |
+|---|---|---|
+| Binding extensions | extension bundle | Linux 向けの .NET binding extensions を同梱 |
+| 監視 | OTel agent | Application Insights Java agent を同梱 |
+| `host.json` | ソースのローカル設定 | staging 内だけを Azure 用に変更 |
+| ビルド | Maven Wrapper | Maven Wrapper + .NET 拡張機能ビルド。remote build は無効 |
 
-ローカル実行では extension bundle と OTel agent を使用します。
-Azure 用の成果物には、Linux 向けの .NET binding extensions と
-Application Insights Java agent を同梱します。
+> **成果物のビルド成功だけでは、Azure 上の閉域構成で動作することを保証しません。**
+> explicit extension installation を使用していますが、公式の第一推奨は extension bundle です。
+> Java + DTS + Flex + Internet 全拒否の組み合わせが公式に動作保証された構成ではありません。
+
+<details>
+<summary>ビルドの詳細と unit tests：agent の切り替え・Java 11 互換性・出力先の分離</summary>
+
 Functions の staging 完了後に拡張機能を build し、`azure` profile が staging 内の
 設定と依存ファイルを Azure 用に整えます。staging の `host.json` から
 `extensionBundle` を除去し、ソースの `host.json` はローカル用の設定を保持します。
@@ -229,7 +337,6 @@ Azure 成果物からはローカル用 OTel agent と
 `azure-functions-java-opentelemetry` invocation middleware を除去します。
 このライブラリの 1.1.0 は例外時に middleware chain を再実行するため、
 Durable の yield を通常終了に変えてしまう組み合わせがあります。ローカル用の依存関係は維持します。
-remote build は無効です。
 
 Azure の Java 11 と API の互換性を保つため Maven は `release=11` を使用します。
 新しい JDK で `source` / `target` だけを指定すると、Java 11 にない API の呼び出しが
@@ -238,40 +345,58 @@ Azure の Java 11 と API の互換性を保つため Maven は `release=11` を
 azd は複数アプリを並列に package するため、拡張機能の intermediate / build / output は
 各アプリの `target` 配下に分離します。
 Java 用の拡張機能ビルドには、通常の .NET SDK と ExtensionsMetadataGenerator を使います。
-`AzurePlatformDNS` service tag は Deny 専用なので Allow ルールを作らず、
-Azure 提供 DNS の標準の非フィルタ動作を維持しています。
 
-これは Microsoft が説明する
+拡張機能の同梱方式は
 [explicit extension installation](https://learn.microsoft.com/azure/azure-functions/functions-bindings-register#explicitly-install-extensions)
-を使用します。ただし公式の第一推奨は extension bundle であり、
-**Java + DTS + Flex + Internet 全拒否の組み合わせを公式が動作保証した構成という意味ではありません。**
+を参照してください。
+
+| テスト | コマンド |
+|---|---|
+| Java unit tests | `.\samples\durable-csv-batch\mvnw.cmd -f .\pom.xml test` |
+| 初期化 hook の retry／失敗／キー削除 | `pwsh -NoProfile -File .\scripts\tests\Initialize-Database.Tests.ps1` |
+
+hook テストは mock の Azure CLI と HTTP 応答を使い、ビルド端末上で実行します。
+
+</details>
 
 ### Azure 上で確認する項目と制限
 
-Japan East の実環境で `azd up` の provision / 4アプリの deploy / 初期化 hook が成功しました。
-4アプリの再起動後も、HTTP のキー認証、順次 Durable の3段の期待出力、
-12件の fan-out/fan-in、CSV の成功490件・不正10件・ページ3件（pageSize=200）と
-同じ batch ID での再実行を確認しました。DB 初期化 hook も再実行可能です。
-13個の Private Endpoint は Approved、Storage / PostgreSQL の public network と
-Storage の Shared Key は無効、Functions の VNet 統合と resource-scoped MI ロールを確認しました。
-Internet 拒否の実測と NSG の全拒否規則も確認済みです。
+デプロイ後は **HTTP 応答だけでなく、Durable の `Completed` と期待出力、CSV の処理件数**
+まで確認してください。以下は既存の Japan East 実環境での確認記録です。
+別の環境・リージョンでの動作を保証するものではありません。
 
-DTS の public 接続を有効にした後、手元の PC からダッシュボードの照会 API を呼び、
-`default` / `workshop` の両方で Entra 認証付きの照会が HTTP 200 となり、
-保存済みのオーケストレーションを取得できることを確認しました。匿名の照会は HTTP 404 でした。
-正式な `dashboardUrl` と Entra 認証を使い、ブラウザーでも両 task hub の一覧表示を確認しました。
-Functions の順次処理、fan-out/fan-in、CSV の再実行と Internet 向け接続の timeout も再確認しました。
+#### 確認済み
 
-監視は private ingestion / local auth 無効の設定で Application Insights の request telemetry
-が取り込まれていることを ARM の集計メトリックで確認しました。
-public query を許可した後は、手元の PC から両リソースへ Entra 認証でクエリし、
-request 集計と Queue 検証の trace 3件を確認しました。匿名クエリは両方とも401です。
-private 接続元からのクエリ、Queue trigger の実メッセージ処理、業務 MI の DDL 拒否の
-負のテスト、scale-to-zero からのコールドスタートと負荷による scale-out は未確認です。
-デプロイ後は HTTP 応答に加え、Durable の `runtimeStatus = Completed` と期待出力、
-CSV の処理件数を確認します。
+| 対象 | 確認結果 |
+|---|---|
+| デプロイ・初期化 | `azd up` の provision、4アプリの deploy、初期化 hook が成功。hook の再実行も確認 |
+| HTTP / Durable | 4アプリ再起動後のキー認証、順次処理の3段の期待出力、12件の fan-out/fan-in |
+| CSV | 成功490件・不正10件・3ページ（`pageSize=200`）。同じ batch ID での再実行も確認 |
+| ネットワーク・MI | Private Endpoint 13個が Approved。Storage / PostgreSQL の public network と Storage Shared Key は無効。VNet 統合と resource-scoped MI ロールを確認 |
+| Internet outbound | 固定宛先への接続 timeout と、NSG の全拒否規則を確認。DTS public 接続の有効化後も再確認 |
+| DTS ダッシュボード | 両 task hub の Entra 認証付き照会が HTTP 200、匿名照会は404。正式な `dashboardUrl` からブラウザーで一覧表示も確認 |
+| 監視 | private ingestion / local auth 無効で request telemetry を ARM 集計メトリックから確認。public query 許可後、手元の PC から両監視リソースへ Entra 認証で request 集計・Queue の trace 3件を照会。匿名は401 |
+| 関数の実行範囲 | 4アプリの全16関数を実行。Queue 関数は手動実行 API で3回起動し、成功3件・失敗0件 |
 
-追加検証では4アプリの全16関数を実行しました。上記の HTTP / Durable / 初期化に加え、
+#### 未確認
+
+| 対象 | 残っている確認 |
+|---|---|
+| 監視 | private 接続元からのクエリ |
+| Queue trigger | Storage Queue への実メッセージ投入による起動（手動実行 API とは別） |
+| DB 権限 | 業務 MI による DDL が拒否されることの負のテスト |
+| スケール | scale-to-zero からのコールドスタート、負荷による scale-out |
+
+#### デプロイ後の検証
+
+[`scripts/Test-AzureDeployment.ps1`](scripts/Test-AzureDeployment.ps1) は一時 Function key を使い、
+HTTP 認証、Durable の期待出力、CSV 再実行とネットワークを検証します。
+
+> 検証を強制終了した場合は、対象関数に残った `azd-verify-` キーを手動で削除してください。
+
+<details>
+<summary>検証の詳細：Queue の手動実行・ネットワーク判定・Durable の出力比較</summary>
+
 `LogQueueMessage` は公式の
 [非 HTTP 関数の手動実行 API](https://learn.microsoft.com/azure/azure-functions/functions-manually-run-non-http)
 で3回起動しました。他の関数を呼ばない時間帯を区切り、対象 app の Function execution
@@ -279,8 +404,7 @@ CSV の処理件数を確認します。
 既存 master key は管理 API 呼び出し時にメモリ内だけで使用し、出力・保存・変更しません。
 この手動実行は Storage Queue への実メッセージ投入によるトリガー確認とは区別します。
 
-`scripts\Test-AzureDeployment.ps1` は一時 Function key を使い、HTTP 認証、Durable の
-期待出力、CSV 再実行とネットワークを検証します。初期化アプリのキー認証付き
+初期化アプリのキー認証付き
 `POST /api/deployment/verify` は入力を受け付けず、自身の private DNS と固定した
 `www.microsoft.com:443` への新規 TCP 接続の timeout を確認します。
 任意の宛先を指定するプロキシではありません。Internet 向けの新規 outbound の拒否は、
@@ -289,21 +413,20 @@ Azure の順次処理は、各 String Activity 入力の JSON 引用符・エス
 3段の期待値を計算して比較します。
 HTTP status の `historyEvents` は成功 Activity を `TaskCompleted` / `FunctionName`
 として返すため、CSV の3ページ確認はその形式で行います。
-検証中にプロセスを強制終了した場合は、対象関数に残った `azd-verify-` キーを削除してください。
 
-Storage / PostgreSQL の public network は無効です。手元の PC から PostgreSQL /
-Storage を直接操作する場合は VNet への接続経路と private DNS が必要です。
-サンプルの運用性を優先し、Log Analytics と Application Insights は
-`publicNetworkAccessForQuery: Enabled` として、手元の PC / Azure Portal からの
-クエリだけを許可します。匿名公開ではなく、Entra 認証と閲覧権限が必要です。
-取り込み側の public access とローカル認証は無効のままにします。
-AMPLS の ingestion / query access mode も `PrivateOnly` のままです。
-AMPLS の query access mode は接続済み VNet から AMPLS 外の監視リソースへの
-到達性を制御する別設定なので、public client からのクエリのために `Open` にしません。
-Functions の Private Endpoint 経由の取り込みと Internet 拒否も維持します。
-AMPLS の DNS はリンクした VNet 内の他の Monitor 接続にも影響し得るため、
-既存の共有 VNet/AMPLS にそのまま取り込まないでください。
+</details>
 
-これはコストを抑えたサンプルです。PostgreSQL は Burstable・HA なし・7日バックアップ、
-Storage は LRS です。Private Endpoint、PostgreSQL、監視等には継続課金があります。
-本番環境では HA/DR、利用者向け Entra 認証、アラート、初期化アプリの運用制限を別途設計してください。
+#### 監視・運用上の制限
+
+| 項目 | 制限・注意点 |
+|---|---|
+| 監視の public query | 手元の PC / Portal から照会できるよう `publicNetworkAccessForQuery: Enabled`。Entra 認証・閲覧権限は必須 |
+| 監視の取り込み | public ingestion とローカル認証は無効。Functions は Private Endpoint 経由で送信し、Internet 拒否も維持 |
+| AMPLS | ingestion / query access mode は `PrivateOnly`。public client の照会のために `Open` にしない |
+| 既存 VNet への組み込み | AMPLS の DNS は同じ VNet 内の他の Monitor 接続にも影響するため、既存の共有 VNet/AMPLS にそのまま取り込まない |
+| コスト優先の構成 | PostgreSQL は Burstable・HA なし・7日バックアップ。Storage は LRS |
+| 継続課金 | Private Endpoint、PostgreSQL、監視等は利用状況に応じて課金 |
+| 本番での追加設計 | HA/DR、利用者向け Entra 認証、アラート、初期化アプリの運用制限 |
+
+AMPLS の query access mode は、接続済み VNet から AMPLS 外の監視リソースへの到達性を
+制御する設定です。監視リソースへの public client からのクエリ許可とは別の設定です。
