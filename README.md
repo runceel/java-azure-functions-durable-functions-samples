@@ -33,10 +33,13 @@ Aspire の AppHost は C#、Functions 本体は Java です。
 - .NET 10 SDK と Aspire CLI
 - インストール済み JDK を指す `JAVA_HOME` を設定した JDK 11 以降
 - Azure Functions Core Tools v4（`func` を PATH に設定）
-- Linux コンテナーエンジンを使用する Docker Desktop
+- Linux コンテナーを実行できる Podman（Podman Desktop など）
 
 Maven は各サンプルに含まれる Maven Wrapper を使用するため、別途インストールは不要です。
-Docker Desktop を起動してから次に進みます。初回起動には依存パッケージと
+Podman machine を起動してから次に進みます。`apphost.run.json` と `aspire.config.json` の `https` / `http`
+両プロファイルに `ASPIRE_CONTAINER_RUNTIME=podman` を設定しています。
+Docker Desktop を使用する場合は、両プロファイルの値を `docker` に変更してください。
+初回起動には依存パッケージと
 コンテナーイメージのダウンロードが必要です。
 
 ### 2. Aspire で起動する

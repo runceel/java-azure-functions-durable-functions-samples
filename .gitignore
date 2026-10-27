@@ -2,4 +2,5 @@
 **/local.settings.json
 .azure/
 **/bin/
+**/obj/
 infra/main.json
